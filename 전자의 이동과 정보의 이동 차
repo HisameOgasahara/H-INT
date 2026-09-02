@@ -1,0 +1,65 @@
+https://chatgpt.com/share/6a97de07-e4e4-83e8-a43c-00706362f0ff
+
+
+
+### 핵심
+
+ADD r0,r1,r2 라는 ISA 명령 하나를 물리적으로 보면:
+
+레지스터의 전하 상태
+→ 전압 생성
+→ MOSFET gate를 켬/끔
+→ 다음 배선의 전하를 충전/방전
+→ 그 전압이 다음 MOSFET을 켬/끔
+→ 다시 충전/방전
+→ …
+→ ALU 결과선의 전압 형성
+
+이 과정이야.
+
+
+
+그래서 오빠가 보고 싶었던 진짜 물리 흐름은 이렇게 생각하는 게 제일 정확해:
+
+전자가 r1 → MUX → ALU → r0로 택배처럼 이동하는 게 아니라, 각 단계에서 전압이 MOSFET을 제어하고 → 그 MOSFET이 다음 노드를 새로 충전/방전하고 → 그 전압이 다음 단계를 제어하는 연쇄다.
+
+즉 CPU의 정보 흐름은 길게 전파되지만, 전하 이동은 대부분 각 게이트 주변의 짧은 국소적인 충·방전이야. 이게 MOSFET 수준과 ADD 같은 ISA 동작 사이를 이어주는 핵심이야.
+
+
+
+
+### 상세
+
+ADD r0,r1,r2에서 실제 흐름을 따라가면 이래:
+
+① r1 레지스터가 이미 1/0을 전하 상태로 기억하고 있음
+예를 들어 어떤 비트가 1이라면 레지스터 내부 저장 노드가 대략 \(V_{DD}\) 근처 전압이야. 그 노드에는 기생 커패시턴스가 있어서 전하가 저장되어 있고, cross-coupled inverter들이 그 상태를 계속 재생해서 유지해.
+
+② r1 출력 → MUX
+레지스터 출력선 \(Q\)가 MUX 안 MOSFET들의 게이트에 영향을 줘. 여기서 중요한 게, 레지스터 안의 전자가 통째로 ALU까지 흘러가는 게 아니야.
+
+Q = 1이라는 높은 전압이 다음 MOSFET을 켜면,
+
+$$ V_{DD}\rightarrow \text{MOSFET channel}\rightarrow \text{다음 노드의 capacitance} $$
+
+쪽으로 전류가 흘러 다음 노드가 충전되고,
+
+반대로 0을 만들어야 하면
+
+$$ \text{다음 노드 capacitance}\rightarrow \text{MOSFET}\rightarrow GND $$
+
+로 방전돼.
+
+즉 각 게이트가 자기 전원에서 새 전하를 공급해서 다음 신호를 다시 만든다.
+
+③ MUX가 선택한 값이 ALU 입력에 도착
+MUX도 결국 MOSFET 집합이야. r2를 선택하라는 control voltage가 특정 MOSFET 경로를 ON시키고 다른 경로는 OFF시킨다. 그러면 선택된 경로를 따라 ALU 입력 노드의 capacitance가 충전/방전돼서 \(A,B\)의 비트 전압들이 만들어져.
+
+④ Adder에서 다시 수많은 충전·방전이 일어남
+예를 들어 한 비트 full-adder는 논리적으로
+
+$$ \operatorname{Sum}:\{0,1\}^3\to\{0,1\}, \qquad \operatorname{Sum}(a,b,c)=a\oplus b\oplus c $$
+
+같은 함수를 구현하지. 하지만 물리적으로는 XOR/AND/OR을 구성하는 MOSFET들이 입력 전압에 따라 계속 ON/OFF되면서 내부 노드를 VDD로 충전하거나 GND로 방전한다.
+
+carry도 똑같이 다음 adder 단계의 게이트를 켜고 → 그 단계가 다시 자기 전원으로 다음 노드를 충전/방전한다.
