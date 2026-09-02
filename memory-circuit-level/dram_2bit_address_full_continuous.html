@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>2-bit Address DRAM Read — Continuous Physical Animation</title>
+<style>
+:root{
+  --bg:#081019;--panel:#0f1822;--cpu:#0e2134;--mem:#211629;--text:#eef6ff;--muted:#9fb0c2;
+  --wire:#46576a;--hi:#ffd166;--blue:#60a5fa;--green:#34d399;--red:#fb7185;--cyan:#67e8f9;--violet:#a78bfa;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+header{padding:13px 16px;background:#0b141d;border-bottom:1px solid #263547}
+h1{font-size:18px;margin:0 0 4px}.sub{font-size:12px;color:var(--muted)}
+.layout{display:grid;grid-template-columns:315px 1fr;height:calc(100vh - 62px)}
+aside{padding:14px;background:var(--panel);border-right:1px solid #263547;overflow:auto}
+h2{font-size:14px;margin:12px 0 7px}
+button,select,input{width:100%;padding:9px;margin:4px 0;border:1px solid #34475a;border-radius:8px;background:#182536;color:var(--text)}
+.row{display:flex;gap:7px}.row>*{flex:1}
+.bitbtn.on{border-color:var(--hi);box-shadow:0 0 0 1px var(--hi) inset}
+.status{padding:10px;margin-top:10px;border:1px solid #34475a;border-radius:9px;background:#0c151f;font-size:12px;line-height:1.55}
+.legend{font-size:11px;color:var(--muted);line-height:1.5;margin-top:12px}
+.stage{overflow:auto}
+svg{display:block;min-width:1620px;min-height:980px;background:
+linear-gradient(#111923 1px,transparent 1px),linear-gradient(90deg,#111923 1px,transparent 1px);background-size:24px 24px}
+.cpuZone{fill:#0d1d2e;stroke:#2a5d88;stroke-width:2}.memZone{fill:#1b1223;stroke:#794790;stroke-width:2}
+.title{fill:var(--text);font-size:15px;font-weight:800}.label{fill:var(--text);font-size:13px;font-weight:700}
+.small{fill:var(--muted);font-size:11px}.tiny{fill:var(--muted);font-size:10px}
+.box{fill:#172331;stroke:#65788c;stroke-width:2}.sense{fill:#191c30;stroke:#8b5cf6;stroke-width:2}
+.wire{stroke:var(--wire);stroke-width:4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.mos{stroke:#dbe5ee;stroke-width:3;fill:none}.cap{stroke:#dbe5ee;stroke-width:3}
+.node{fill:#7e8c9b}.electron{fill:var(--cyan);filter:drop-shadow(0 0 4px #67e8f9)}
+.cellBox{fill:#171d26;stroke:#59697b;stroke-width:2}.cellBox.sel{stroke:var(--hi);stroke-width:4}
+.traceGrid{stroke:#263343;stroke-width:1}
+</style>
+</head>
+<body>
+<header>
+<h1>2비트 주소 → DRAM 1T1C 셀 선택 → CPU Register 읽기</h1>
+<div class="sub">주소 선택부터 시작해서 decoder, WL, access MOSFET, capacitor 전하, bit line, sense amp, data bus, CPU register, clock까지 연속 시간으로 연결</div>
+</header>
+
+<div class="layout">
+<aside>
+<h2>1) 주소 선택</h2>
+<div class="row">
+  <button id="a1Btn" class="bitbtn">A1 = 0</button>
+  <button id="a0Btn" class="bitbtn">A0 = 0</button>
+</div>
+
+<h2>2) 각 주소의 저장값</h2>
+<select id="memPattern">
+  <option value="1010">00→1, 01→0, 10→1, 11→0</option>
+  <option value="0101">00→0, 01→1, 10→0, 11→1</option>
+  <option value="1111">모두 1</option>
+  <option value="0000">모두 0</option>
+</select>
+
+<h2>3) 재생</h2>
+<div class="row"><button id="play">▶ 재생</button><button id="reset">↺ 리셋</button></div>
+<label class="small">시간 직접 이동</label>
+<input id="scrub" type="range" min="0" max="1000" value="0"/>
+<label class="small">재생 속도</label>
+<input id="speed" type="range" min="0.25" max="2.0" value="1" step="0.25"/>
+
+<div class="status" id="status"></div>
+<div class="legend">
+<b>주소가 실제로 하는 일</b><br>
+A1A0의 전압 조합이 decoder로 들어감 → WL0~WL3 중 하나만 High → 선택된 셀의 access MOSFET만 ON → 그 셀 capacitor만 bit line에 연결.<br><br>
+파란 점은 전하 재배치 방향을 보기 쉽게 표시한 것.
+</div>
+</aside>
+
+<div class="stage">
+<svg id="svg" viewBox="0 0 1620 980">
+<!-- Zones -->
+<rect x="20" y="20" width="560" height="650" rx="18" class="cpuZone"/>
+<rect x="600" y="20" width="990" height="650" rx="18" class="memZone"/>
+<text x="42" y="50" class="title">CPU 영역</text>
+<text x="620" y="50" class="title">DRAM 영역</text>
+
+<!-- CPU Address Source -->
+<rect x="50" y="90" width="210" height="155" rx="12" class="box"/>
+<text x="70" y="120" class="label">LOAD 요청</text>
+<text x="70" y="151" class="small">A1</text>
+<circle id="a1Lamp" cx="150" cy="147" r="12" fill="#46576a"/>
+<text x="70" y="183" class="small">A0</text>
+<circle id="a0Lamp" cx="150" cy="179" r="12" fill="#46576a"/>
+<text x="70" y="215" class="small">CS + RD</text>
+
+<path id="a1Wire" d="M162 147 H690" class="wire"/>
+<path id="a0Wire" d="M162 179 H690" class="wire"/>
+<path id="ctrlWire" d="M260 215 H690" class="wire"/>
+<text x="350" y="137" class="small">Address bus A1</text>
+<text x="350" y="169" class="small">Address bus A0</text>
+<text x="370" y="205" class="small">CS / RD</text>
+
+<!-- Decoder -->
+<rect x="690" y="90" width="230" height="190" rx="12" class="box"/>
+<text x="710" y="120" class="label">2→4 Row Decoder</text>
+<text x="710" y="146" class="small">A1,A0 MOSFET 논리망</text>
+<text x="710" y="170" class="small">00 → WL0</text>
+<text x="710" y="193" class="small">01 → WL1</text>
+<text x="710" y="216" class="small">10 → WL2</text>
+<text x="710" y="239" class="small">11 → WL3</text>
+
+<!-- Word lines -->
+<path id="wl0" d="M920 125 H1220" class="wire"/>
+<path id="wl1" d="M920 245 H1220" class="wire"/>
+<path id="wl2" d="M920 365 H1220" class="wire"/>
+<path id="wl3" d="M920 485 H1220" class="wire"/>
+<text x="935" y="115" class="tiny">WL0</text>
+<text x="935" y="235" class="tiny">WL1</text>
+<text x="935" y="355" class="tiny">WL2</text>
+<text x="935" y="475" class="tiny">WL3</text>
+
+<!-- 4 DRAM cells -->
+<g id="cells">
+  <g id="cell0" transform="translate(1010,80)">
+    <rect width="210" height="95" rx="10" class="cellBox"/>
+    <text x="12" y="22" class="small">Cell 00</text>
+    <text id="cellText0" x="12" y="45" class="small">stored = 1</text>
+    <line id="mos0a" x1="145" y1="34" x2="145" y2="70" class="mos"/>
+    <line id="mos0b" x1="160" y1="34" x2="160" y2="70" class="mos"/>
+    <line x1="153" y1="70" x2="235" y2="70" class="wire"/>
+    <circle id="node0" cx="82" cy="55" r="6" class="node"/>
+    <line x1="62" y1="72" x2="102" y2="72" class="cap"/>
+    <line x1="62" y1="80" x2="102" y2="80" class="cap"/>
+    <line x1="82" y1="55" x2="82" y2="72" class="wire"/>
+  </g>
+  <g id="cell1" transform="translate(1010,200)">
+    <rect width="210" height="95" rx="10" class="cellBox"/>
+    <text x="12" y="22" class="small">Cell 01</text>
+    <text id="cellText1" x="12" y="45" class="small">stored = 0</text>
+    <line id="mos1a" x1="145" y1="34" x2="145" y2="70" class="mos"/>
+    <line id="mos1b" x1="160" y1="34" x2="160" y2="70" class="mos"/>
+    <line x1="153" y1="70" x2="235" y2="70" class="wire"/>
+    <circle id="node1" cx="82" cy="55" r="6" class="node"/>
+    <line x1="62" y1="72" x2="102" y2="72" class="cap"/>
+    <line x1="62" y1="80" x2="102" y2="80" class="cap"/>
+    <line x1="82" y1="55" x2="82" y2="72" class="wire"/>
+  </g>
+  <g id="cell2" transform="translate(1010,320)">
+    <rect width="210" height="95" rx="10" class="cellBox"/>
+    <text x="12" y="22" class="small">Cell 10</text>
+    <text id="cellText2" x="12" y="45" class="small">stored = 1</text>
+    <line id="mos2a" x1="145" y1="34" x2="145" y2="70" class="mos"/>
+    <line id="mos2b" x1="160" y1="34" x2="160" y2="70" class="mos"/>
+    <line x1="153" y1="70" x2="235" y2="70" class="wire"/>
+    <circle id="node2" cx="82" cy="55" r="6" class="node"/>
+    <line x1="62" y1="72" x2="102" y2="72" class="cap"/>
+    <line x1="62" y1="80" x2="102" y2="80" class="cap"/>
+    <line x1="82" y1="55" x2="82" y2="72" class="wire"/>
+  </g>
+  <g id="cell3" transform="translate(1010,440)">
+    <rect width="210" height="95" rx="10" class="cellBox"/>
+    <text x="12" y="22" class="small">Cell 11</text>
+    <text id="cellText3" x="12" y="45" class="small">stored = 0</text>
+    <line id="mos3a" x1="145" y1="34" x2="145" y2="70" class="mos"/>
+    <line id="mos3b" x1="160" y1="34" x2="160" y2="70" class="mos"/>
+    <line x1="153" y1="70" x2="235" y2="70" class="wire"/>
+    <circle id="node3" cx="82" cy="55" r="6" class="node"/>
+    <line x1="62" y1="72" x2="102" y2="72" class="cap"/>
+    <line x1="62" y1="80" x2="102" y2="80" class="cap"/>
+    <line x1="82" y1="55" x2="82" y2="72" class="wire"/>
+  </g>
+</g>
+
+<path id="bitLine" d="M1245 100 V580" class="wire"/>
+<text x="1260" y="112" class="small">Shared Bit Line</text>
+
+<rect x="1320" y="85" width="190" height="95" rx="12" class="box"/>
+<text x="1340" y="115" class="label">Precharge</text>
+<text x="1340" y="140" class="small">BL → VDD/2</text>
+<path id="preWire" d="M1320 150 H1245" class="wire"/>
+
+<polygon points="1320,430 1425,480 1320,530" class="sense"/>
+<text x="1340" y="484" class="small">Sense Amp</text>
+<path id="senseIn" d="M1245 480 H1320" class="wire"/>
+
+<path id="dataBus" d="M1425 480 H1515 V610 H510 V445 H450" class="wire"/>
+<text x="940" y="628" class="small">Data bus</text>
+
+<rect x="55" y="340" width="405" height="255" rx="15" fill="#10251e" stroke="#2f9f70" stroke-width="2"/>
+<text x="76" y="370" class="label">CPU Register 내부 (1 bit)</text>
+<text x="76" y="395" class="small">clock-controlled input + latch</text>
+<line id="regMos1" x1="160" y1="435" x2="160" y2="505" class="mos"/>
+<line id="regMos2" x1="182" y1="435" x2="182" y2="505" class="mos"/>
+<path id="regInput" d="M450 445 H182" class="wire"/>
+<polygon points="235,420 292,450 235,480" class="box"/>
+<polygon points="365,480 308,450 365,420" class="box"/>
+<text x="249" y="454" class="tiny">INV</text>
+<text x="323" y="454" class="tiny">INV</text>
+<path d="M292 450 H365 M235 450 H205 V525 H390 V450 H365" class="wire"/>
+<circle id="regNode" cx="292" cy="450" r="7" class="node"/>
+<text id="regText" x="172" y="563" class="label">Register = –</text>
+
+<text x="70" y="625" class="label">CPU Clock</text>
+<path id="clockWire" d="M160 615 H215 V595 H270 V635 H325 V615 H380" class="wire"/>
+<path id="clockToReg" d="M270 635 V585 H170 V505" class="wire"/>
+
+<g id="particles"></g>
+
+<rect x="20" y="700" width="1570" height="250" rx="15" fill="#0d151e" stroke="#314052" stroke-width="2"/>
+<text x="40" y="730" class="title">시간에 따른 신호 — 현재 시점까지 순차적으로 그려짐</text>
+<line x1="170" y1="755" x2="1535" y2="755" class="traceGrid"/>
+<line x1="170" y1="807" x2="1535" y2="807" class="traceGrid"/>
+<line x1="170" y1="859" x2="1535" y2="859" class="traceGrid"/>
+<line x1="170" y1="911" x2="1535" y2="911" class="traceGrid"/>
+<text x="55" y="778" class="small">CLK</text>
+<text x="55" y="830" class="small">Selected WL</text>
+<text x="55" y="882" class="small">BL</text>
+<text x="55" y="934" class="small">DATA</text>
+<path id="clkTrace" fill="none" stroke="#a78bfa" stroke-width="3"/>
+<path id="wlTrace" fill="none" stroke="#ffd166" stroke-width="3"/>
+<path id="blTrace" fill="none" stroke="#60a5fa" stroke-width="3"/>
+<path id="dataTrace" fill="none" stroke="#34d399" stroke-width="3"/>
+<line id="cursor" x1="170" y1="745" x2="170" y2="940" stroke="#fff" stroke-width="2"/>
+</svg>
+</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id), NS="http://www.w3.org/2000/svg";
+let a1=0,a0=0,playing=false,elapsed=0,startTime=0,raf=null;
+const duration=9500;
+const memParticles=[], cpuParticles=[], addrParticles=[], clkParticles=[];
+
+function clamp(x,a=0,b=1){return Math.max(a,Math.min(b,x))}
+function smooth(a,b,t){let u=clamp((t-a)/(b-a));return u*u*(3-2*u)}
+function mix(a,b,t){return a+(b-a)*t}
+function addr(){return (a1<<1)|a0}
+function pattern(){return $("memPattern").value.split("").map(Number)}
+function selectedBit(){return pattern()[addr()]}
+function rgbFor(v){if(v>.67)return "#34d399";if(v<.33)return "#fb7185";return "#60a5fa"}
+function setStroke(id,c,w=4){const e=$(id);e.setAttribute("stroke",c);e.setAttribute("stroke-width",w)}
+
+function syncAddressUI(){
+  $("a1Btn").textContent=`A1 = ${a1}`;$("a0Btn").textContent=`A0 = ${a0}`;
+  $("a1Btn").classList.toggle("on",a1===1);$("a0Btn").classList.toggle("on",a0===1);
+  $("a1Lamp").setAttribute("fill",a1?"#ffd166":"#46576a");
+  $("a0Lamp").setAttribute("fill",a0?"#ffd166":"#46576a");
+}
+function updateCells(){
+  const p=pattern();
+  for(let i=0;i<4;i++){
+    $(`cellText${i}`).textContent=`stored = ${p[i]}`;
+    $(`node${i}`).setAttribute("fill",p[i]?"#34d399":"#fb7185");
+    document.querySelector(`#cell${i} .cellBox`).classList.toggle("sel",i===addr());
+  }
+}
+function mk(arr){
+  const c=document.createElementNS(NS,"circle");c.setAttribute("r",4);c.setAttribute("class","electron");c.setAttribute("opacity","0");
+  $("particles").appendChild(c);arr.push(c);
+}
+for(let i=0;i<14;i++)mk(addrParticles);
+for(let i=0;i<16;i++)mk(memParticles);
+for(let i=0;i<18;i++)mk(cpuParticles);
+for(let i=0;i<8;i++)mk(clkParticles);
+
+function interp(points,u){
+  const seg=(points.length-1)*u,i=Math.min(points.length-2,Math.floor(seg)),f=seg-i;
+  return [mix(points[i][0],points[i+1][0],f),mix(points[i][1],points[i+1][1],f)];
+}
+function moveParticles(arr,path,activity,p,a,b){
+  arr.forEach((c,i)=>{
+    if(activity<.02){c.setAttribute("opacity",0);return}
+    let u=((p-a)/(b-a))*1.8+i/arr.length;u=u-Math.floor(u);
+    const [x,y]=interp(path,u);c.setAttribute("cx",x);c.setAttribute("cy",y);c.setAttribute("opacity",activity);
+  });
+}
+function sig(p){
+  const req=smooth(.02,.10,p);
+  let wl=smooth(.18,.32,p)*(1-smooth(.73,.83,p));
+  const mos=clamp((wl-.25)/.55);
+  const bit=selectedBit();
+  const target=bit?0.62:0.38;
+  const bl=mix(.5,target,smooth(.34,.50,p)*mos);
+  const data=mix(.5,bit?1:0,smooth(.54,.70,p));
+  const clk = p<.80?0:(p<.84?smooth(.80,.84,p):(p<.90?1:1-smooth(.90,.94,p)));
+  const capture=smooth(.83,.89,p);
+  const reg=mix(.5,bit?1:0,capture);
+  return {req,wl,mos,bl,data,clk,capture,reg};
+}
+function pathProgress(id,fn,p,baseY,amp,color){
+  const x0=170,x1=1535,N=320,maxI=Math.max(1,Math.floor((N-1)*p));let d="";
+  for(let i=0;i<=maxI;i++){
+    const q=i/(N-1),v=fn(q),x=mix(x0,x1,q),y=baseY-v*amp;
+    d+=(i?" L":"M")+x+" "+y;
+  }
+  $(id).setAttribute("d",d);$(id).setAttribute("stroke",color);
+}
+function phase(p){
+  if(p<.12)return `<b>주소 ${a1}${a0} + CS/RD 출력</b><br>CPU가 선택한 주소 전압 패턴을 decoder 쪽으로 보낸다.`;
+  if(p<.32)return `<b>Decoder가 WL${addr()} 선택</b><br>A1A0=${a1}${a0} 조합에 대응하는 WL${addr()}만 High로 올라간다.`;
+  if(p<.50)return `<b>Cell ${a1}${a0}의 access MOSFET ON</b><br>선택 셀 capacitor와 shared bit line 사이에 전하 공유가 진행된다.`;
+  if(p<.60)return `<b>Sense amplifier 판정</b><br>작은 bit-line ΔV를 저장값 ${selectedBit()}에 해당하는 확실한 논리레벨로 증폭한다.`;
+  if(p<.78)return `<b>Data bus → CPU</b><br>메모리 출력이 CPU register 입력까지 이동한다.`;
+  if(p<.92)return `<b>Clock rising edge → register capture</b><br>안정된 ${selectedBit()}가 CPU latch에 저장된다.`;
+  return `<b>읽기 완료</b><br>주소 ${a1}${a0}의 값 ${selectedBit()}가 CPU register에 들어왔다.`;
+}
+
+function update(ms){
+  const p=clamp(ms/duration),s=sig(p),sel=addr(),b=selectedBit();
+  $("scrub").value=Math.round(p*1000);$("status").innerHTML=phase(p);
+  updateCells();
+
+  setStroke("a1Wire",a1?`rgba(255,209,102,${.2+.8*s.req})`:"#46576a");
+  setStroke("a0Wire",a0?`rgba(255,209,102,${.2+.8*s.req})`:"#46576a");
+  setStroke("ctrlWire",`rgba(255,209,102,${.2+.8*s.req})`);
+
+  for(let i=0;i<4;i++)setStroke(`wl${i}`,i===sel?`rgba(255,209,102,${.18+.82*s.wl})`:"#46576a");
+
+  for(let i=0;i<4;i++){
+    const on=i===sel?s.mos:0;
+    setStroke(`mos${i}a`,`rgba(255,209,102,${.18+.82*on})`,3+3*on);
+    setStroke(`mos${i}b`,`rgba(255,209,102,${.18+.82*on})`,3+3*on);
+  }
+
+  setStroke("bitLine",rgbFor(s.bl));
+  setStroke("senseIn",rgbFor(s.bl));
+  setStroke("dataBus",rgbFor(s.data));
+  setStroke("regInput",rgbFor(s.data));
+  setStroke("clockWire",s.clk>.5?"#a78bfa":"#46576a");
+  setStroke("clockToReg",`rgba(167,139,250,${.2+.8*s.clk})`);
+  setStroke("regMos1",`rgba(255,209,102,${.18+.82*s.capture})`,3+3*s.capture);
+  setStroke("regMos2",`rgba(255,209,102,${.18+.82*s.capture})`,3+3*s.capture);
+  $("regNode").setAttribute("fill",rgbFor(s.reg));
+  $("regText").textContent=p>.89?`Register = ${b}`:"Register = –";
+
+  const addrAct=s.req*(1-smooth(.16,.22,p));
+  const pathAddr=[[170,147],[300,147],[500,147],[690,147]];
+  moveParticles(addrParticles,pathAddr,addrAct,p,.02,.20);
+
+  const cellYs=[150,270,390,510];
+  const cellX=1092, y=cellYs[sel];
+  const path1=[[cellX,y],[1165,y],[1245,y],[1245,480],[1320,480]];
+  const path0=[...path1].reverse();
+  const memAct=s.mos*smooth(.34,.44,p)*(1-smooth(.51,.57,p));
+  moveParticles(memParticles,b?path1:path0,memAct,p,.34,.56);
+
+  const cpuPath=[[1425,480],[1515,480],[1515,610],[1000,610],[700,610],[510,610],[510,445],[450,445],[300,445],[190,445]];
+  const cpuAct=smooth(.56,.65,p)*(1-smooth(.80,.85,p));
+  moveParticles(cpuParticles,cpuPath,cpuAct,p,.56,.84);
+
+  const clkPath=[[270,635],[270,585],[170,585],[170,505]];
+  const clkAct=smooth(.80,.84,p)*(1-smooth(.92,.95,p));
+  moveParticles(clkParticles,clkPath,clkAct,p,.80,.94);
+
+  pathProgress("clkTrace",q=>sig(q).clk,p,790,34,"#a78bfa");
+  pathProgress("wlTrace",q=>sig(q).wl,p,842,34,"#ffd166");
+  pathProgress("blTrace",q=>sig(q).bl,p,894,52,"#60a5fa");
+  pathProgress("dataTrace",q=>sig(q).data,p,946,34,b?"#34d399":"#fb7185");
+  const cx=mix(170,1535,p);$("cursor").setAttribute("x1",cx);$("cursor").setAttribute("x2",cx);
+}
+function frame(now){
+  if(!playing)return;
+  if(!startTime)startTime=now-elapsed/(+$("speed").value);
+  elapsed=(now-startTime)*(+$("speed").value);
+  if(elapsed>=duration){elapsed=duration;playing=false;$("play").textContent="▶ 재생";}
+  update(elapsed);if(playing)raf=requestAnimationFrame(frame);
+}
+function restart(){
+  playing=false;if(raf)cancelAnimationFrame(raf);elapsed=0;startTime=0;$("play").textContent="▶ 재생";syncAddressUI();update(0);
+}
+$("a1Btn").onclick=()=>{a1^=1;restart()};
+$("a0Btn").onclick=()=>{a0^=1;restart()};
+$("memPattern").onchange=restart;
+$("play").onclick=()=>{
+  if(playing){playing=false;cancelAnimationFrame(raf);$("play").textContent="▶ 재생";return}
+  if(elapsed>=duration)elapsed=0;
+  playing=true;startTime=0;$("play").textContent="⏸ 일시정지";raf=requestAnimationFrame(frame);
+};
+$("reset").onclick=restart;
+$("scrub").oninput=()=>{
+  playing=false;if(raf)cancelAnimationFrame(raf);$("play").textContent="▶ 재생";
+  elapsed=(+$("scrub").value/1000)*duration;startTime=0;update(elapsed);
+};
+$("speed").oninput=()=>{if(playing)startTime=performance.now()-elapsed/(+$("speed").value)};
+syncAddressUI();updateCells();update(0);
+</script>
+</body>
+</html>
