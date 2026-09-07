@@ -6,25 +6,24 @@
 #define PORT10_BASE_ADDRESS   (0xF003B000)
 
 #define PORT2_IOCR0           (*(volatile unsigned int *)(PORT2_BASE_ADDRESS + 0x10))
+#define PORT2_INPUT           (*(volatile unsigned int *)(PORT2_BASE_ADDRESS + 0x24))
 
 #define PORT10_IOCR0          (*(volatile unsigned int *)(PORT10_BASE_ADDRESS + 0x10))
 #define PORT10_OUTPUT         (*(volatile unsigned int *)(PORT10_BASE_ADDRESS))
 #define PORT10_OMR            (*(volatile unsigned int *)(PORT10_BASE_ADDRESS + 0x04))
 
-/* Switch 1: Easy Module Shield D2 -> ShieldBuddy digital 2 -> TC275 P02.0 */
-#define SW1_PC0               3
-
-/* Blue LED: Easy Module Shield D13 -> ShieldBuddy digital 13 -> TC275 P10.2 */
-#define BLUE_PC2              19
-#define BLUE_PS2              2
-#define BLUE_PCL2             18
+/* P02.0 Switch 1 / P10.2 blue LED */
+#define PC0                   3
+#define PC2                   19
+#define PS2                   2
+#define PCL2                  18
 
 /* SCU ERU */
 #define SCU_BASE_ADDRESS      (0xF0036000)
 #define SCU_EICR0             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x210))
 #define SCU_IGCR0             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x22C))
 
-/* EICR0 upper half controls Input Channel 1 (ERS1 / ETL1). */
+/* EICR0 upper half: Input Channel 1 = ERS1 / ETL1 */
 #define EXIS1                 20
 #define FEN1                  24
 #define EIEN1                 27
@@ -41,64 +40,68 @@
 IfxCpu_syncEvent cpuSyncEvent = 0;
 
 /*
- * Interrupt control practice I (slide 160)
- * Switch 1 (D2 / P02.0) falling edge toggles LED1 (blue, D13 / P10.2).
+ * Slide 160 practice I:
+ * Switch 1 (D2 -> P02.0 -> REQ6 -> ERS1/In10) falling edge
+ * toggles LED1, the blue LED (D13 -> P10.2).
+ *
+ * This is the working 05_interrupt.c structure with only the
+ * switch input path and LED pin changed for practice I.
  */
 __interrupt(0x0F) __vector_table(0)
 void ISR0(void)
 {
-    /* P10.2 toggle: PCL2=1 and PS2=1 in OMR. */
-    PORT10_OMR = ((0x1U << BLUE_PCL2) | (0x1U << BLUE_PS2));
+    /* Toggle P10.2 by setting both PS2 and PCL2 in OMR. */
+    PORT10_OMR |= ((0x1U << PCL2) | (0x1U << PS2));
 }
 
-void init_blue_LED(void)
+void init_LED(void)
 {
-    /* P10.2 -> push-pull general-purpose output. */
-    PORT10_IOCR0 &= ~((0x1FU) << BLUE_PC2);
-    PORT10_IOCR0 |=  ((0x10U) << BLUE_PC2);
+    /* Reset PC2 in Port 10 IOCR0 register. */
+    PORT10_IOCR0 &= ~((0x1FU) << PC2);
 
-    /* Start with blue LED OFF. */
-    PORT10_OUTPUT &= ~(0x1U << BLUE_PS2);
+    /* Set P10.2 to push-pull general-purpose output. */
+    PORT10_IOCR0 |= ((0x10U) << PC2);
+
+    /* Start with LED off. */
+    PORT10_OUTPUT &= ~(0x1U << PS2);
 }
 
-void init_switch1(void)
+void init_switch(void)
 {
-    /* P02.0 -> general-purpose input with pull-up. */
-    PORT2_IOCR0 &= ~((0x1FU) << SW1_PC0);
-    PORT2_IOCR0 |=  ((0x02U) << SW1_PC0);
+    /* P02.0 uses PC0 field in PORT2_IOCR0. */
+    PORT2_IOCR0 &= ~((0x1FU) << PC0);
+
+    /* Set P02.0 to general-purpose input with pull-up. */
+    PORT2_IOCR0 |= ((0x02U) << PC0);
 }
 
-void init_ERU_switch1(void)
+void init_ERU(void)
 {
+    /* ERU (External Request Unit) setting. */
+
     /*
-     * Slide 117: Switch 1 D2 -> P02.0.
-     * Slide 118: P02.0 has SCU input REQ6.
-     * Slide 131 ERU input map: REQ6(P02.0) is ERS1 input In10.
-     * Therefore Input Channel 1 is used, and EXIS1 must be 000B (input 0),
-     * NOT 001B.
+     * Slide 131 input map:
+     * P02.0 = REQ6 = ERS1 input In10.
+     * Therefore EXIS1 must be 000B (input 0 selected).
      */
-
-    /* Select ERS1 input 0 = REQ6 (P02.0): EXIS1 = 000B. */
     SCU_EICR0 &= ~(0x7U << EXIS1);
 
-    /* Pull-up switch: press causes High -> Low, detect falling edge. */
+    /* Detect falling edge and generate an event. */
     SCU_EICR0 |=  (0x1U << FEN1);
-
-    /* Enable trigger event generation for ETL1. */
     SCU_EICR0 |=  (0x1U << EIEN1);
 
-    /* Route ETL1 trigger to OGU0: INP1 = 000B. */
+    /* Route the event to output channel 0. */
     SCU_EICR0 &= ~(0x7U << INP1);
 
-    /* OGU0: IOUT0 active on trigger event (IGP0 = 01B). */
+    /* Activate interrupt output for output channel 0. */
     SCU_IGCR0 &= ~(0x3U << IGP0);
     SCU_IGCR0 |=  (0x1U << IGP0);
 
-    /* Interrupt priority = 0x0F. */
+    /* SRC (Service Request Control) setting. */
     SRC_SCU_ERU0 &= ~(0xFFU);
     SRC_SCU_ERU0 |=  (0x0FU);
 
-    /* Enable service request. */
+    /* Enable service request generation. */
     SRC_SCU_ERU0 |=  (0x1U << SRE);
 
     /* Route service request to CPU0. */
@@ -109,18 +112,22 @@ void core0_main(void)
 {
     IfxCpu_enableInterrupts();
 
+    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
+     * Enable the watchdogs and service them periodically if it is required.
+     */
     IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
     IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
 
+    /* Wait for CPU sync event. */
     IfxCpu_emitEvent(&cpuSyncEvent);
     IfxCpu_waitEvent(&cpuSyncEvent, 1);
 
-    init_blue_LED();
-    init_switch1();
-    init_ERU_switch1();
+    init_LED();
+    init_switch();
+    init_ERU();
 
     while (1)
     {
-        /* Blue LED changes only when the Switch 1 interrupt ISR runs. */
+        /* Main loop stays idle; LED toggling is performed only by the ISR. */
     }
 }
