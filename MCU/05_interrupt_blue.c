@@ -11,10 +11,10 @@
 #define PORT10_OUTPUT         (*(volatile unsigned int *)(PORT10_BASE_ADDRESS))
 #define PORT10_OMR            (*(volatile unsigned int *)(PORT10_BASE_ADDRESS + 0x04))
 
-/* Switch 1: Shield D2 -> TC275 P02.0 */
+/* Switch 1: Easy Module Shield D2 -> ShieldBuddy digital 2 -> TC275 P02.0 */
 #define SW1_PC0               3
 
-/* Blue LED: Shield D13 -> TC275 P10.2 */
+/* Blue LED: Easy Module Shield D13 -> ShieldBuddy digital 13 -> TC275 P10.2 */
 #define BLUE_PC2              19
 #define BLUE_PS2              2
 #define BLUE_PCL2             18
@@ -24,7 +24,7 @@
 #define SCU_EICR0             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x210))
 #define SCU_IGCR0             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x22C))
 
-/* EICR0 fields for Input Channel 1 (ERS1 / ETL1) */
+/* EICR0 upper half controls Input Channel 1 (ERS1 / ETL1). */
 #define EXIS1                 20
 #define FEN1                  24
 #define EIEN1                 27
@@ -71,15 +71,15 @@ void init_switch1(void)
 void init_ERU_switch1(void)
 {
     /*
-     * Slide 160 changes the preceding example from Switch 2 (P02.1 / ERS2)
-     * to Switch 1 (P02.0 / REQ6 / ERS1).
-     * ERS1 is Input Channel 1, so EICR0's EXIS1/FEN1/EIEN1/INP1 fields
-     * must be used. REQ6 is the second ERS1 input, therefore EXIS1 = 001B.
+     * Slide 117: Switch 1 D2 -> P02.0.
+     * Slide 118: P02.0 has SCU input REQ6.
+     * Slide 131 ERU input map: REQ6(P02.0) is ERS1 input In10.
+     * Therefore Input Channel 1 is used, and EXIS1 must be 000B (input 0),
+     * NOT 001B.
      */
 
-    /* Select REQ6 (P02.0) as ERS1 input. */
+    /* Select ERS1 input 0 = REQ6 (P02.0): EXIS1 = 000B. */
     SCU_EICR0 &= ~(0x7U << EXIS1);
-    SCU_EICR0 |=  (0x1U << EXIS1);
 
     /* Pull-up switch: press causes High -> Low, detect falling edge. */
     SCU_EICR0 |=  (0x1U << FEN1);
@@ -87,7 +87,7 @@ void init_ERU_switch1(void)
     /* Enable trigger event generation for ETL1. */
     SCU_EICR0 |=  (0x1U << EIEN1);
 
-    /* Route ETL1 trigger to OGU0. */
+    /* Route ETL1 trigger to OGU0: INP1 = 000B. */
     SCU_EICR0 &= ~(0x7U << INP1);
 
     /* OGU0: IOUT0 active on trigger event (IGP0 = 01B). */
