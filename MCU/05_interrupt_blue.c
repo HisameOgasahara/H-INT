@@ -24,10 +24,11 @@
 #define SCU_EICR0             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x210))
 #define SCU_IGCR0             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x22C))
 
-#define EXIS0                 4
-#define FEN0                  8
-#define EIEN0                 11
-#define INP0                  12
+/* EICR0 fields for Input Channel 1 (ERS1 / ETL1) */
+#define EXIS1                 20
+#define FEN1                  24
+#define EIEN1                 27
+#define INP1                  28
 #define IGP0                  14
 
 /* Service Request Control */
@@ -41,28 +42,28 @@ IfxCpu_syncEvent cpuSyncEvent = 0;
 
 /*
  * Interrupt control practice I (slide 160)
- * Switch 1 press toggles the blue LED.
+ * Switch 1 (D2 / P02.0) falling edge toggles LED1 (blue, D13 / P10.2).
  */
 __interrupt(0x0F) __vector_table(0)
 void ISR0(void)
 {
-    /* P10.2 toggle: PCL2=1 and PS2=1 in OMR */
+    /* P10.2 toggle: PCL2=1 and PS2=1 in OMR. */
     PORT10_OMR = ((0x1U << BLUE_PCL2) | (0x1U << BLUE_PS2));
 }
 
 void init_blue_LED(void)
 {
-    /* P10.2 -> push-pull general-purpose output */
+    /* P10.2 -> push-pull general-purpose output. */
     PORT10_IOCR0 &= ~((0x1FU) << BLUE_PC2);
     PORT10_IOCR0 |=  ((0x10U) << BLUE_PC2);
 
-    /* Start with blue LED OFF */
+    /* Start with blue LED OFF. */
     PORT10_OUTPUT &= ~(0x1U << BLUE_PS2);
 }
 
 void init_switch1(void)
 {
-    /* P02.0 -> general-purpose input with pull-up */
+    /* P02.0 -> general-purpose input with pull-up. */
     PORT2_IOCR0 &= ~((0x1FU) << SW1_PC0);
     PORT2_IOCR0 |=  ((0x02U) << SW1_PC0);
 }
@@ -70,22 +71,26 @@ void init_switch1(void)
 void init_ERU_switch1(void)
 {
     /*
-     * Switch 1 is D2 -> P02.0 -> REQ6.
-     * REQ6 is selected through ERS0 input 1, therefore EXIS0 = 001B.
+     * Slide 160 changes the preceding example from Switch 2 (P02.1 / ERS2)
+     * to Switch 1 (P02.0 / REQ6 / ERS1).
+     * ERS1 is Input Channel 1, so EICR0's EXIS1/FEN1/EIEN1/INP1 fields
+     * must be used. REQ6 is the second ERS1 input, therefore EXIS1 = 001B.
      */
-    SCU_EICR0 &= ~(0x7U << EXIS0);
-    SCU_EICR0 |=  (0x1U << EXIS0);
 
-    /* Pull-up switch: pressed means High -> Low, so detect falling edge. */
-    SCU_EICR0 |=  (0x1U << FEN0);
+    /* Select REQ6 (P02.0) as ERS1 input. */
+    SCU_EICR0 &= ~(0x7U << EXIS1);
+    SCU_EICR0 |=  (0x1U << EXIS1);
 
-    /* Enable trigger event generation. */
-    SCU_EICR0 |=  (0x1U << EIEN0);
+    /* Pull-up switch: press causes High -> Low, detect falling edge. */
+    SCU_EICR0 |=  (0x1U << FEN1);
 
-    /* Route ETL0 trigger to OGU0. */
-    SCU_EICR0 &= ~(0x7U << INP0);
+    /* Enable trigger event generation for ETL1. */
+    SCU_EICR0 |=  (0x1U << EIEN1);
 
-    /* OGU0: always enable IOUT0 on trigger. */
+    /* Route ETL1 trigger to OGU0. */
+    SCU_EICR0 &= ~(0x7U << INP1);
+
+    /* OGU0: IOUT0 active on trigger event (IGP0 = 01B). */
     SCU_IGCR0 &= ~(0x3U << IGP0);
     SCU_IGCR0 |=  (0x1U << IGP0);
 
@@ -96,7 +101,7 @@ void init_ERU_switch1(void)
     /* Enable service request. */
     SRC_SCU_ERU0 |=  (0x1U << SRE);
 
-    /* Route to CPU0. */
+    /* Route service request to CPU0. */
     SRC_SCU_ERU0 &= ~(0x3U << TOS);
 }
 
@@ -116,6 +121,6 @@ void core0_main(void)
 
     while (1)
     {
-        /* LED changes only when the interrupt ISR runs. */
+        /* Blue LED changes only when the Switch 1 interrupt ISR runs. */
     }
 }
