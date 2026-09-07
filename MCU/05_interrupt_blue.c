@@ -12,7 +12,7 @@
 #define PORT10_OUTPUT         (*(volatile unsigned int *)(PORT10_BASE_ADDRESS))
 #define PORT10_OMR            (*(volatile unsigned int *)(PORT10_BASE_ADDRESS + 0x04))
 
-/* P02.0 Switch 1 / P10.2 blue LED */
+/* P02.0 = Switch 1, P10.2 = blue LED */
 #define PC0                   3
 #define PC2                   19
 #define PS2                   2
@@ -20,10 +20,10 @@
 
 /* SCU ERU */
 #define SCU_BASE_ADDRESS      (0xF0036000)
-#define SCU_EICR0             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x210))
+#define SCU_EICR1             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x214))
 #define SCU_IGCR0             (*(volatile unsigned int *)(SCU_BASE_ADDRESS + 0x22C))
 
-/* EICR0 upper half: Input Channel 1 = ERS1 / ETL1 */
+/* EICR1 upper half controls Input Channel 3 (ERS3 / ETL3). */
 #define EXIS1                 20
 #define FEN1                  24
 #define EIEN1                 27
@@ -40,12 +40,11 @@
 IfxCpu_syncEvent cpuSyncEvent = 0;
 
 /*
- * Slide 160 practice I:
- * Switch 1 (D2 -> P02.0 -> REQ6 -> ERS1/In10) falling edge
- * toggles LED1, the blue LED (D13 -> P10.2).
- *
- * This is the working 05_interrupt.c structure with only the
- * switch input path and LED pin changed for practice I.
+ * Interrupt control practice I (slide 160).
+ * Starting from 05_interrupt.c:
+ *   Switch 2 (P02.1 / REQ14 / ERS2-In21) -> Switch 1 (P02.0 / REQ6 / ERS3-In32)
+ *   Red LED (P10.1) -> Blue LED (P10.2)
+ * OGU0, SRC_SCU_ERU0, priority, CPU0 and ISR structure are unchanged.
  */
 __interrupt(0x0F) __vector_table(0)
 void ISR0(void)
@@ -80,18 +79,20 @@ void init_ERU(void)
     /* ERU (External Request Unit) setting. */
 
     /*
-     * Slide 131 input map:
-     * P02.0 = REQ6 = ERS1 input In10.
-     * Therefore EXIS1 must be 000B (input 0 selected).
+     * Slide 131 ERU input map:
+     * P02.0 -> REQ6 -> ERS3 input In32.
+     * ERS3 is Input Channel 3, mapped to EICR1 upper-half fields.
+     * In32 is input number 2, therefore EXIS1 = 010B.
      */
-    SCU_EICR0 &= ~(0x7U << EXIS1);
+    SCU_EICR1 &= ~(0x7U << EXIS1);
+    SCU_EICR1 |=  (0x2U << EXIS1);
 
     /* Detect falling edge and generate an event. */
-    SCU_EICR0 |=  (0x1U << FEN1);
-    SCU_EICR0 |=  (0x1U << EIEN1);
+    SCU_EICR1 |=  (0x1U << FEN1);
+    SCU_EICR1 |=  (0x1U << EIEN1);
 
     /* Route the event to output channel 0. */
-    SCU_EICR0 &= ~(0x7U << INP1);
+    SCU_EICR1 &= ~(0x7U << INP1);
 
     /* Activate interrupt output for output channel 0. */
     SCU_IGCR0 &= ~(0x3U << IGP0);
