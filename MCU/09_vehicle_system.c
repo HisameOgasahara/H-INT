@@ -11,10 +11,10 @@
  *   SW2 D3           : right turn lever
  *   LED1 D13 (Blue)  : left turn indicator
  *   LED2 D12 (Red)   : right turn indicator
- *   Buzzer D5        : turn-signal sound / wrong-direction warning
+ *   Buzzer D5        : warning only when steering opposite to selected direction
  *
  * Function B - Auto light
- *   LDR A1           : ambient light sensor, VADC Group 4 Channel 6
+ *   LDR A1             : ambient light sensor, VADC Group 4 Channel 6
  *   RGB LED D9/D10/D11 : head lamp (white = R+G+B)
  *
  * Board mapping verified from ShieldBuddy TC275 + Easy Module Shield V1:
@@ -33,9 +33,8 @@
  *   - SW1/SW2 are active-low.
  *   - The shield schematic shows the LDR from VCC to A1 and 10 kOhm from
  *     A1 to GND: bright -> higher ADC, dark -> lower ADC.
- *   - Although one vendor sheet calls D5 an "active buzzer", the course
- *     material labels the onboard part as a passive buzzer/speaker.  The
- *     preceding working PWM exercise therefore drives D5 from GTM TOM0_CH11.
+ *   - D5 is driven through the same verified GTM TOM0_CH11 -> TOUT3 -> P02.3
+ *     PWM path used by the preceding buzzer exercise.
  */
 
 /* ============================ PORTS ============================ */
@@ -127,10 +126,10 @@
 #define GTM_TOM0_TGC1_FUPD_CTRL       (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x08238u))
 #define GTM_TOM0_TGC1_ENDIS_CTRL      (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x08270u))
 #define GTM_TOM0_TGC1_OUTEN_CTRL      (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x08278u))
-#define GTM_TOM0_CH11_CTRL             (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C0u))
-#define GTM_TOM0_CH11_SR0              (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C4u))
-#define GTM_TOM0_CH11_SR1              (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C8u))
-#define GTM_TOM0_CH11_CM1              (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082D0u))
+#define GTM_TOM0_CH11_CTRL            (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C0u))
+#define GTM_TOM0_CH11_SR0             (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C4u))
+#define GTM_TOM0_CH11_SR1             (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C8u))
+#define GTM_TOM0_CH11_CM1             (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082D0u))
 
 #define GTM_DISS                       1u
 #define GTM_DISR                       0u
@@ -146,7 +145,7 @@
 #define CLK_SRC_SR                     12u
 #define SL                             11u
 
-/* Same known-good 1 kHz / 50% PWM as 07_pwm_control_3_buzzer_button.c. */
+/* Same verified 1 kHz / 50% PWM path as 07_pwm_control_3_buzzer_button.c. */
 #define BUZZER_PWM_PERIOD              6250u
 #define BUZZER_PWM_DUTY                3125u
 
@@ -276,8 +275,6 @@ static void init_vadc(void)
      * Give the two inputs different result registers.
      * CH6 (LDR) -> G4RES0
      * CH7 (steering) -> G4RES1
-     * This prevents one function from accidentally observing the other channel's
-     * result while both are sampled continuously in the same main loop.
      */
     VADC_G4CHCTR6 &= ~((0xFu << RESREG) | (0x3u << ICLSEL));
     VADC_G4CHCTR6 |=  (0u << RESREG) | (1u << RESPOS);
@@ -478,7 +475,7 @@ int core0_main(void)
             blink_on = 0u;
         }
 
-        /* Opposite steering direction while lever is active -> continuous warning. */
+        /* Slide requirement: warning only when steering opposite to selected direction. */
         wrong_direction = 0u;
         if ((turn_state == TURN_LEFT) && (steer == STEER_ZONE_RIGHT))
             wrong_direction = 1u;
@@ -510,13 +507,13 @@ int core0_main(void)
             set_right_indicator(0u);
         }
 
-        /* Turn-signal click: PWM sound follows blink. Wrong direction: continuous tone. */
-        if (wrong_direction != 0u)
-            set_buzzer(1u);
-        else if ((turn_state != TURN_NONE) && (blink_on != 0u))
-            set_buzzer(1u);
-        else
-            set_buzzer(0u);
+        /*
+         * Follow the slide exactly:
+         * SW1/SW2 alone only selects/blinks the indicator.
+         * The buzzer sounds only while the steering handle is turned to
+         * the direction opposite to the selected lever.
+         */
+        set_buzzer(wrong_direction);
 
         g_turn_state = (unsigned int)turn_state;
         g_blink_on = blink_on;
