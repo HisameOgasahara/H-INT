@@ -1,18 +1,20 @@
 #include "Ifx_Types.h"
 #include "IfxCpu.h"
-#include "IfxScuWdt.h"
+#include "kickback_player.h"
 #include "kickback_score.h"
 
 /*
- * KICK BACK one-buzzer player
+ * KICK BACK one-buzzer player module
  *
- * Easy Module Shield V1 + ShieldBuddy TC275 mapping used here:
+ * IMPORTANT FOR AURIX DEVELOPMENT STUDIO:
+ *   - This file intentionally does NOT define core0_main().
+ *   - This file intentionally does NOT define cpuSyncEvent.
+ *   - Cpu0_Main.c owns those project-wide symbols and only calls kickback_run().
+ *
+ * Easy Module Shield V1 + ShieldBuddy TC275 mapping:
  *   SW1    D2 -> P02.0 : PLAY
  *   SW2    D3 -> P02.1 : STOP by ERU interrupt
  *   Buzzer D5 -> P02.3 -> GTM TOUT3 -> TOM0_CH11
- *
- * This reuses the same verified PWM and SW2 interrupt architecture as
- * MCU/10_scale_interrupt_stop.c, but replaces the scale table with a score.
  */
 
 /* ============================ PORT 2 ============================ */
@@ -96,8 +98,6 @@
 #define CLK_SRC_SR_SHIFT            12U
 #define SL_BIT                      11U
 
-IfxCpu_syncEvent cpuSyncEvent = 0;
-
 volatile unsigned int g_stop_requested = 0U;
 volatile unsigned int g_current_event = 0U;
 
@@ -120,18 +120,20 @@ void ISR_SW2_STOP(void)
     REG_GTM_TOM0_CH11_CM1 = 0U;
 }
 
-int core0_main(void)
+/*
+ * Public module entry point.
+ * Cpu0_Main.c should perform the normal AURIX startup/watchdog/sync sequence,
+ * then call this function once.  This function owns the application loop.
+ */
+void kickback_run(void)
 {
     unsigned int previous_sw1 = 1U;
     unsigned int current_sw1;
 
+    /* Cpu0_Main.c normally enables interrupts before this call, but enabling
+     * them again is harmless and guarantees SW2 STOP is live here.
+     */
     IfxCpu_enableInterrupts();
-
-    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
-    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
-
-    IfxCpu_emitEvent(&cpuSyncEvent);
-    IfxCpu_waitEvent(&cpuSyncEvent, 1);
 
     init_ports();
     init_buzzer_pwm();
@@ -166,8 +168,6 @@ int core0_main(void)
             previous_sw1 = current_sw1;
         }
     }
-
-    return 1;
 }
 
 static void init_ports(void)
@@ -186,7 +186,7 @@ static unsigned int read_sw1(void)
 
 static void init_sw2_interrupt(void)
 {
-    /* Corrected, already hardware-verified configuration from exercise 10. */
+    /* Corrected, hardware-verified configuration from exercise 10. */
     REG_SCU_EICR1 &= ~(0x7U << EXIS0_SHIFT);
     REG_SCU_EICR1 |=  (0x1U << EXIS0_SHIFT);
 
@@ -238,11 +238,7 @@ static unsigned int wait_score_ticks_abortable(unsigned int ticks_16th)
     unsigned int target_ticks;
     unsigned long long numerator;
 
-    /*
-     * One 1/16-note duration:
-     *   60 seconds / BPM / 4
-     * Convert directly to STM ticks to avoid floating point.
-     */
+    /* One 1/16-note duration = 60 seconds / BPM / 4. */
     numerator = (unsigned long long)STM0_FREQUENCY_HZ * 60ULL * (unsigned long long)ticks_16th;
     target_ticks = (unsigned int)(numerator / ((unsigned long long)KICKBACK_BPM * TICKS_PER_QUARTER));
 
