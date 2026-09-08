@@ -2,29 +2,38 @@
 #include "IfxCpu.h"
 #include "IfxScuWdt.h"
 
-/* RGB LED Registers */
+/* RGB LED Registers
+ * ShieldBuddy mapping:
+ * D9  -> P02.7 (Red)
+ * D10 -> P10.5 (Green)
+ * D11 -> P10.3 (Blue)
+ */
 #define PORT2_BASE_ADDRESS     (0xF003A200)
 #define PORT2_IOCR4            (*(volatile unsigned int *)(PORT2_BASE_ADDRESS + 0x14))
-#define PORT2_OUTPUT           (*(volatile unsigned int *)(PORT2_BASE_ADDRESS))
+#define PORT2_OMR              (*(volatile unsigned int *)(PORT2_BASE_ADDRESS + 0x04))
 
 #define PORT10_BASE_ADDRESS    (0xF003B000)
 #define PORT10_IOCR0           (*(volatile unsigned int *)(PORT10_BASE_ADDRESS + 0x10))
 #define PORT10_IOCR4           (*(volatile unsigned int *)(PORT10_BASE_ADDRESS + 0x14))
-#define PORT10_OUTPUT          (*(volatile unsigned int *)(PORT10_BASE_ADDRESS))
+#define PORT10_OMR             (*(volatile unsigned int *)(PORT10_BASE_ADDRESS + 0x04))
 
-/* Field bit positions of RGB LED Registers */
+/* IOCR field positions */
 #define PC3                    27
 #define PC5                    11
 #define PC7                    27
-#define P3                     3
-#define P5                     5
-#define P7                     7
+
+/* OMR pin-set / pin-clear positions */
+#define PS3                    3
+#define PS5                    5
+#define PS7                    7
+#define PCL3                   19
+#define PCL5                   21
+#define PCL7                   23
 
 /* Versatile Analog-to-Digital Converter Registers */
 #define VADC_BASE_ADDRESS      (0xF0020000)
 
 #define VADC_CLC               (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x000))
-#define VADC_GLOBCFG           (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x080))
 #define VADC_G4ARBCFG          (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x1480))
 #define VADC_G4ARBPR           (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x1484))
 #define VADC_G4ICLASS0         (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x14A0))
@@ -43,20 +52,16 @@
 #define PRIO0                  0
 
 #define CMS                    8
-#define STCS                   0
 
 #define FLUSH                  10
 #define TREV                   9
 #define ENGT                   0
-#define RF                     5
-#define REQCHNR                0
 
 #define RESPOS                 21
 #define RESREG                 16
 #define ICLSEL                 0
 
 #define VF                     31
-#define RESULT                 0
 
 /* System Control Unit Registers */
 #define SCU_BASE_ADDRESS       (0xF0036000)
@@ -69,6 +74,7 @@
 IfxCpu_syncEvent cpuSyncEvent = 0;
 
 void init_RGBLED(void);
+void set_RGBLED(unsigned int red, unsigned int green, unsigned int blue);
 void init_VADC(void);
 void VADC_start_conversion(void);
 unsigned int VADC_read_result(void);
@@ -76,10 +82,11 @@ unsigned int VADC_read_result(void);
 void core0_main(void)
 {
     unsigned int adc_result;
+
     IfxCpu_enableInterrupts();
 
     /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
-     * Enable the watchdogs and service them periodically if it is required
+     * Enable the watchdogs and service them periodically if it is required.
      */
     IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
     IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
@@ -91,151 +98,141 @@ void core0_main(void)
     init_RGBLED();
     init_VADC();
 
-    while(1)
+    while (1)
     {
-        /* Start a single VADC conversion. */
         VADC_start_conversion();
-
-        /* Read the converted ADC value. */
         adc_result = VADC_read_result();
 
-        if (adc_result >= 3096)
+        if (adc_result >= 3096u)
         {
-            PORT2_OUTPUT |= 0x1 << P7;     /* Turn on the red LED. */
-            PORT10_OUTPUT |= 0x1 << P5;    /* Turn on the green LED. */
-            PORT10_OUTPUT |= 0x1 << P3;    /* Turn on the blue LED. */
+            /* Red + Green + Blue = White */
+            set_RGBLED(1u, 1u, 1u);
         }
-        else if (adc_result >= 2048)
+        else if (adc_result >= 2048u)
         {
-            PORT2_OUTPUT &= 0x0 << P7;     /* Turn off the red LED. */
-            PORT10_OUTPUT |= 0x1 << P5;    /* Turn on the green LED. */
-            PORT10_OUTPUT |= 0x1 << P3;    /* Turn off the blue LED. */
+            /* Green + Blue = Cyan */
+            set_RGBLED(0u, 1u, 1u);
         }
-        else if (adc_result >= 1024)
+        else if (adc_result >= 1024u)
         {
-            PORT2_OUTPUT &= 0x0 << P7;     /* Turn off the red LED. */
-            PORT10_OUTPUT &= 0x0 << P5;    /* Turn off the green LED. */
-            PORT10_OUTPUT |= 0x1 << P3;    /* Turn off the blue LED. */
+            /* Blue */
+            set_RGBLED(0u, 0u, 1u);
         }
         else
         {
-            PORT2_OUTPUT &= 0x0 << P7;     /* Turn off the red LED. */
-            PORT10_OUTPUT &= 0x0 << P5;    /* Turn off the green LED. */
-            PORT10_OUTPUT &= 0x0 << P3;    /* Turn off the blue LED. */
+            /* All off */
+            set_RGBLED(0u, 0u, 0u);
         }
     }
 }
 
 void init_RGBLED(void)
 {
-    // Reset PC7 in Port 2 IOCR4 register
-    PORT2_IOCR4 &= ~((0x1F) << PC7);
+    /* P02.7: push-pull general-purpose output */
+    PORT2_IOCR4 &= ~((0x1Fu) << PC7);
+    PORT2_IOCR4 |=  ((0x10u) << PC7);
 
-    // Set PC7 to push-pull mode in Port 2 IOCR4 register
-    PORT2_IOCR4 |= ((0x10) << PC7);
+    /* P10.5: push-pull general-purpose output */
+    PORT10_IOCR4 &= ~((0x1Fu) << PC5);
+    PORT10_IOCR4 |=  ((0x10u) << PC5);
 
-    // Reset PC5 in Port 10 IOCR4 register
-    PORT10_IOCR4 &= ~((0x1F) << PC5);
+    /* P10.3: push-pull general-purpose output */
+    PORT10_IOCR0 &= ~((0x1Fu) << PC3);
+    PORT10_IOCR0 |=  ((0x10u) << PC3);
 
-    // Set PC5 to push-pull mode in Port 10 IOCR4 register
-    PORT10_IOCR4 |= ((0x10) << PC5);
+    set_RGBLED(0u, 0u, 0u);
+}
 
-    // Reset PC3 in Port 10 IOCR0 register
-    PORT10_IOCR0 &= ~((0x1F) << PC3);
+void set_RGBLED(unsigned int red, unsigned int green, unsigned int blue)
+{
+    unsigned int port10_omr = 0u;
 
-    // Set PC3 to push-pull mode in Port 10 IOCR0 register
-    PORT10_IOCR0 |= ((0x10) << PC3);
+    /*
+     * TC27x OMR semantics:
+     * PSx=1,PCLx=0 -> set OUT.Px
+     * PSx=0,PCLx=1 -> clear OUT.Px
+     * This changes only the selected pin and does not overwrite the whole OUT register.
+     */
+    port10_omr |= green ? (1u << PS5) : (1u << PCL5);
+    port10_omr |= blue  ? (1u << PS3) : (1u << PCL3);
+    PORT10_OMR = port10_omr;
+
+    PORT2_OMR = red ? (1u << PS7) : (1u << PCL7);
 }
 
 void init_VADC(void)
 {
-    // Password Access to unlock CPU0 WDT Control Register 0
-    SCU_WDTCPU0CON0 = ((SCU_WDTCPU0CON0 ^ 0xFC) & ~(1 << LCK)) | (1 << ENDINIT);
-    while ((SCU_WDTCPU0CON0 & (1 << LCK)) != 0);  // Wait until to unlock CPU0 WDT Control Register 0
+    /* Password Access to unlock CPU0 WDT Control Register 0 */
+    SCU_WDTCPU0CON0 = ((SCU_WDTCPU0CON0 ^ 0xFCu) & ~(1u << LCK)) | (1u << ENDINIT);
+    while ((SCU_WDTCPU0CON0 & (1u << LCK)) != 0u);
 
-    // Modify Access to clear the ENDINIT bit in CPU0 WDT Control Register 0
-    SCU_WDTCPU0CON0 = ((SCU_WDTCPU0CON0 ^ 0xFC) | (1 << LCK)) & ~(1 << ENDINIT);
-    while ((SCU_WDTCPU0CON0 & (1 << LCK)) == 0);  // Wait until to clear the ENDINIT bit in CPU0 WDT Control Register 0
+    /* Modify Access to clear ENDINIT */
+    SCU_WDTCPU0CON0 = ((SCU_WDTCPU0CON0 ^ 0xFCu) | (1u << LCK)) & ~(1u << ENDINIT);
+    while ((SCU_WDTCPU0CON0 & (1u << LCK)) == 0u);
 
-    /* Enable the VADC module clock. */
-    VADC_CLC &= ~(1 << DISR);
+    /* Enable VADC module clock */
+    VADC_CLC &= ~(1u << DISR);
 
-    // Password Access to unlock CPU0 WDT Control Register 0
-    SCU_WDTCPU0CON0 = ((SCU_WDTCPU0CON0 ^ 0xFC) & ~(1 << LCK)) | (1 << ENDINIT);
-    while ((SCU_WDTCPU0CON0 & (1 << LCK)) != 0);  // Wait until to unlock CPU0 WDT Control Register 0
+    /* Password Access to unlock CPU0 WDT Control Register 0 */
+    SCU_WDTCPU0CON0 = ((SCU_WDTCPU0CON0 ^ 0xFCu) & ~(1u << LCK)) | (1u << ENDINIT);
+    while ((SCU_WDTCPU0CON0 & (1u << LCK)) != 0u);
 
-    // Modify Access to set the ENDINIT bit in CPU0 WDT Control Register 0
-    SCU_WDTCPU0CON0 = ((SCU_WDTCPU0CON0 ^ 0xFC) | (1 << LCK)) | (1 << ENDINIT);
-    while ((SCU_WDTCPU0CON0 & (1 << LCK)) == 0);  // Wait until to clear the ENDINIT bit in CPU0 WDT Control Register 0
+    /* Modify Access to set ENDINIT */
+    SCU_WDTCPU0CON0 = ((SCU_WDTCPU0CON0 ^ 0xFCu) | (1u << LCK)) | (1u << ENDINIT);
+    while ((SCU_WDTCPU0CON0 & (1u << LCK)) == 0u);
 
-    /* Wait until the VADC module is enabled. */
-    while ((VADC_CLC & (1u << DISS)) != 0u)
-    {
-    }
+    while ((VADC_CLC & (1u << DISS)) != 0u);
 
-    // Set Request Source 0 to the highest priority.
-    VADC_G4ARBPR |= ((0x3) << PRIO0);
+    /* Request Source 0: highest priority, wait-for-start mode, arbitration slot enabled */
+    VADC_G4ARBPR |= ((0x3u) << PRIO0);
+    VADC_G4ARBPR &= ~(1u << CSM0);
+    VADC_G4ARBPR |= (1u << ASEN0);
 
-    // Select Wait-for-Start conversion mode.
-    VADC_G4ARBPR &= ~(1 << CSM0);
+    /* Queue Source 0: enable requests, clear old queue entries */
+    VADC_G4QMR0 &= ~((0x3u) << ENGT);
+    VADC_G4QMR0 |=  ((0x1u) << ENGT);
+    VADC_G4QMR0 |=  (1u << FLUSH);
 
-    // Enable Arbitration Source Input 0.
-    VADC_G4ARBPR |= (1 << ASEN0);
+    /* Group 4 converter: normal operation */
+    VADC_G4ARBCFG &= ~(0x3u << ANONC);
+    VADC_G4ARBCFG |=  (0x3u << ANONC);
 
-    /* Clear the Queue gate-control field. */
-    VADC_G4QMR0 &= ~((0x3) << ENGT);
-    /* Enable Queue conversion requests. */
-    VADC_G4QMR0 |= ((0x1) << ENGT);
+    /* Input Class 0: 12-bit standard conversion */
+    VADC_G4ICLASS0 &= ~((0x7u) << CMS);
 
-    /* Remove all existing queue entries. */
-    VADC_G4QMR0 |= (1 << FLUSH);
-
-    /* Set the Group 4 converter to normal operation. */
-    VADC_G4ARBCFG |= ((0x3) << ANONC);
-
-    /* Select 12-bit standard conversion mode. */
-    VADC_G4ICLASS0 &= ~((0x7) << CMS);
-
-    /* Store Channel 7 results in right-aligned format. */
-    VADC_G4CHCTR7 |= (1 << RESPOS);
-
-    /* Clear the result-register selection field. */
-    VADC_G4CHCTR7 &= ~((0xF) << RESREG);
-
-    /* Store Channel 7 results in Group Result Register 1. */
-    VADC_G4CHCTR7 |= (1 << RESREG);
-
-    /* Select Group-specific Input Class 0. */
-    VADC_G4CHCTR7 &= ~((0x3) << ICLSEL);
+    /* Channel 7 -> Group Result Register 1, right-aligned, Input Class 0 */
+    VADC_G4CHCTR7 &= ~((0xFu) << RESREG);
+    VADC_G4CHCTR7 |=  (1u << RESREG);
+    VADC_G4CHCTR7 |=  (1u << RESPOS);
+    VADC_G4CHCTR7 &= ~((0x3u) << ICLSEL);
 }
 
 void VADC_start_conversion(void)
 {
-    /* Reset the queue channel selection bits. */
-    VADC_G4QINR0 &= ~0x1F;
+    /*
+     * IMPORTANT: G4QINR0 is write-only from the software point of view at this
+     * shared address; reads return G4QBUR0 status. Therefore do not use a
+     * read-modify-write expression here.
+     *
+     * REQCHNR = 7, RF = 0, ENSI = 0, EXTR = 0 -> one conversion of G4CH7.
+     */
+    VADC_G4QINR0 = 0x07u;
 
-    /* Select VADC Group 4 Channel 7 for conversion. */
-    VADC_G4QINR0 |= 0x07;
-
-    /* Configure the queue entry for a single conversion. */
-    VADC_G4QINR0 &= ~((0x1 << RF));
-
-    /* Issue a software trigger to execute the queue request. */
-    VADC_G4QMR0 |= (0x1 << TREV);
+    /* Generate software trigger */
+    VADC_G4QMR0 |= (1u << TREV);
 }
 
 unsigned int VADC_read_result(void)
 {
-    unsigned int result;
+    unsigned int result_register;
 
-    /* Poll until the result-valid flag is set. */
-    while ((VADC_G4RES1 & (0x1 << VF)) == 0u)
+    /* Wait for a new conversion result */
+    do
     {
+        result_register = VADC_G4RES1;
     }
+    while ((result_register & (1u << VF)) == 0u);
 
-    /* Extract the conversion data from result register 1. */
-    result = VADC_G4RES1 & (0xFFFF << RESULT);
-
-    /* Return the converted ADC value to the caller. */
-    return result;
+    /* 12-bit, right-aligned result: bits [11:0] */
+    return (result_register & 0x0FFFu);
 }
