@@ -46,6 +46,7 @@
 #define REG_GTM_TOM0_CH11_CTRL         (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C0U))
 #define REG_GTM_TOM0_CH11_SR0          (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C4U))
 #define REG_GTM_TOM0_CH11_SR1          (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082C8U))
+#define REG_GTM_TOM0_CH11_CM1          (*(volatile unsigned int *)(GTM_BASE_ADDRESS + 0x082D0U))
 
 #define UPEN_CTRL3                22U
 #define HOST_TRIG                 0U
@@ -143,14 +144,20 @@ void init_Buzzer(void)
 
 void buzzer_on(void)
 {
+    /*
+     * TC27x GTM TOM asynchronous duty update:
+     * write SR1 and CM1 with the same value so the next synchronous
+     * shadow update cannot overwrite the directly written CM1 value.
+     */
     REG_GTM_TOM0_CH11_SR1 = BUZZER_PWM_DUTY;
-    REG_GTM_TOM0_TGC1_GLB_CTRL |= (1U << HOST_TRIG);
+    REG_GTM_TOM0_CH11_CM1 = BUZZER_PWM_DUTY;
 }
 
 void buzzer_off(void)
 {
+    /* CM1 = 0 gives 0% duty cycle. Keep SR1 identical to CM1. */
     REG_GTM_TOM0_CH11_SR1 = 0U;
-    REG_GTM_TOM0_TGC1_GLB_CTRL |= (1U << HOST_TRIG);
+    REG_GTM_TOM0_CH11_CM1 = 0U;
 }
 
 void init_GTM_TOM0_Buzzer_PWM(void)
@@ -213,6 +220,6 @@ void init_GTM_TOM0_Buzzer_PWM(void)
     /* TOUT3 <- TOM0 channel 11. */
     REG_GTM_TOUTSEL0 &= ~((0x3U) << SEL3);
 
-    /* Apply settings. */
+    /* Apply initial channel/output/shadow settings. */
     REG_GTM_TOM0_TGC1_GLB_CTRL |= (1U << HOST_TRIG);
 }
