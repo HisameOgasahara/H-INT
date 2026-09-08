@@ -42,11 +42,12 @@
 #define ENDINIT                     0U
 
 /*
- * SW2: P02.1 -> REQ14 -> ERS2 input In22.
- * EICR1 lower half controls input channel 2 (ERS2 / ETL2).
+ * SW2: P02.1 -> REQ14 -> ERS2.
+ * MCU programming slides 148-152 use EICR1 lower half (input channel 2),
+ * EXIS0 = 001b, FEN0 bit 8, EIEN0 bit 11, INP0 = 000b -> OGU0.
  */
 #define EXIS0_SHIFT                 4U
-#define FEN0_BIT                    9U
+#define FEN0_BIT                    8U
 #define EIEN0_BIT                   11U
 #define INP0_SHIFT                  12U
 #define IGP0_SHIFT                  14U
@@ -57,7 +58,7 @@
 
 #define SRE_BIT                     10U
 #define TOS_SHIFT                   11U
-#define SW2_ISR_PRIORITY            0x10U
+#define SW2_ISR_PRIORITY            0x0FU
 
 /* ============================== STM ============================= */
 #define STM0_BASE_ADDRESS           (0xF0000000U)
@@ -107,7 +108,6 @@
 #define NOTE_GAP_MS                 70U
 #define NOTE_COUNT                  8U
 
-/* Equal-tempered note frequencies rounded to integer hertz. */
 static const unsigned int g_note_hz[NOTE_COUNT] =
 {
     262U,  /* C4 : Do  */
@@ -121,8 +121,6 @@ static const unsigned int g_note_hz[NOTE_COUNT] =
 };
 
 IfxCpu_syncEvent cpuSyncEvent = 0;
-
-/* Set by SW2 ISR, read by the melody loop. */
 volatile unsigned int g_stop_requested = 0U;
 
 static void init_ports(void);
@@ -134,16 +132,12 @@ static void buzzer_off(void);
 static unsigned int wait_ms_abortable(unsigned int milliseconds);
 static void play_scale(void);
 
-/*
- * SW2 interrupt: silence immediately and request melody abort.
- * Priority 0x10 is programmed into SRC_SCU_ERU0 below.
- */
 __interrupt(SW2_ISR_PRIORITY) __vector_table(0)
 void ISR_SW2_STOP(void)
 {
     g_stop_requested = 1U;
 
-    /* Immediate 0% duty. Keep shadow/action duty registers identical. */
+    /* Stop the active PWM immediately. */
     REG_GTM_TOM0_CH11_SR1 = 0U;
     REG_GTM_TOM0_CH11_CM1 = 0U;
 }
@@ -155,10 +149,6 @@ int core0_main(void)
 
     IfxCpu_enableInterrupts();
 
-    /*
-     * !!WATCHDOG AND SAFETY WATCHDOG ARE DISABLED HERE!!
-     * Enable and service them periodically when required by the application.
-     */
     IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
     IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
 
@@ -174,14 +164,12 @@ int core0_main(void)
     {
         current_sw1 = read_sw1();
 
-        /* Active-low SW1: start only on a released(1) -> pressed(0) edge. */
         if ((previous_sw1 != 0U) && (current_sw1 == 0U))
         {
             g_stop_requested = 0U;
             play_scale();
             buzzer_off();
 
-            /* Do not retrigger while SW1 is still held down. */
             while (read_sw1() == 0U)
             {
                 if (g_stop_requested != 0U)
@@ -203,7 +191,7 @@ int core0_main(void)
 
 static void init_ports(void)
 {
-    /* SW1 P02.0 and SW2 P02.1: general-purpose input with pull-up. */
+    /* SW1/SW2 are pull-up inputs. */
     REG_PORT2_IOCR0 &= ~((0x1FU << PC0_SHIFT) | (0x1FU << PC1_SHIFT));
     REG_PORT2_IOCR0 |=  ((0x02U << PC0_SHIFT) | (0x02U << PC1_SHIFT));
 
@@ -220,27 +208,27 @@ static unsigned int read_sw1(void)
 static void init_sw2_interrupt(void)
 {
     /*
-     * Official TC27x ERU path:
-     * P02.1 -> REQ14 -> ERS2 input In22.
-     * Therefore EXIS0 (channel 2) selects input number 2 = 010b.
+     * Follow MCU programming slides 148-154 exactly:
+     *   P02.1 -> ERS2
+     *   EXIS0 = 001b
+     *   FEN0  = bit 8 (falling edge)
+     *   EIEN0 = bit 11
+     *   INP0  = 000b -> OGU0
+     *   IGP0  = 01b
+     *   SRC_SCUERU0: SRPN=0x0F, SRE=1, TOS=CPU0
      */
     REG_SCU_EICR1 &= ~(0x7U << EXIS0_SHIFT);
-    REG_SCU_EICR1 |=  (0x2U << EXIS0_SHIFT);
+    REG_SCU_EICR1 |=  (0x1U << EXIS0_SHIFT);
 
-    /* Pull-up switch press is a high -> low transition: falling-edge detect. */
-    REG_SCU_EICR1 |= (1U << FEN0_BIT);
+    REG_SCU_EICR1 &= ~(1U << 9U);        /* REN0 = 0 */
+    REG_SCU_EICR1 |=  (1U << FEN0_BIT); /* FEN0 = 1 */
+    REG_SCU_EICR1 |=  (1U << EIEN0_BIT);
 
-    /* Enable trigger event generation for ETL2. */
-    REG_SCU_EICR1 |= (1U << EIEN0_BIT);
-
-    /* Route ETL2 trigger to OGU0. */
     REG_SCU_EICR1 &= ~(0x7U << INP0_SHIFT);
 
-    /* OGU0 generates IOUT0 whenever its trigger event arrives. */
     REG_SCU_IGCR0 &= ~(0x3U << IGP0_SHIFT);
     REG_SCU_IGCR0 |=  (0x1U << IGP0_SHIFT);
 
-    /* Interrupt priority and CPU0 routing. */
     REG_SRC_SCU_ERU0 &= ~0xFFU;
     REG_SRC_SCU_ERU0 |= SW2_ISR_PRIORITY;
     REG_SRC_SCU_ERU0 |= (1U << SRE_BIT);
@@ -258,14 +246,9 @@ static void buzzer_set_frequency(unsigned int frequency_hz)
         return;
     }
 
-    /* Rounded integer period count for CMU_FXCLK1 = 6.25 MHz. */
     period = (BUZZER_CLOCK_HZ + (frequency_hz / 2U)) / frequency_hz;
     duty = period / 2U;
 
-    /*
-     * Keep both shadow and action registers identical.
-     * This changes the note immediately while preserving the next shadow update.
-     */
     REG_GTM_TOM0_CH11_SR0 = period;
     REG_GTM_TOM0_CH11_SR1 = duty;
     REG_GTM_TOM0_CH11_CM0 = period;
@@ -274,7 +257,6 @@ static void buzzer_set_frequency(unsigned int frequency_hz)
 
 static void buzzer_off(void)
 {
-    /* TC27x TOM: CM1 = 0 gives 0% duty cycle. */
     REG_GTM_TOM0_CH11_SR1 = 0U;
     REG_GTM_TOM0_CH11_CM1 = 0U;
 }
@@ -330,42 +312,25 @@ static void play_scale(void)
 
 static void init_buzzer_pwm(void)
 {
-    /* Password access: unlock CPU0 WDT Control Register 0. */
     REG_SCU_WDTCPU0CON0 = ((REG_SCU_WDTCPU0CON0 ^ 0xFCU) & ~(1U << LCK)) | (1U << ENDINIT);
-    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) != 0U)
-    {
-    }
+    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) != 0U) { }
 
-    /* Modify access: clear ENDINIT. */
     REG_SCU_WDTCPU0CON0 = ((REG_SCU_WDTCPU0CON0 ^ 0xFCU) | (1U << LCK)) & ~(1U << ENDINIT);
-    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) == 0U)
-    {
-    }
+    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) == 0U) { }
 
-    /* Enable GTM module. */
     REG_GTM_CLC &= ~(1U << GTM_DISR);
 
-    /* Password access: unlock CPU0 WDT Control Register 0. */
     REG_SCU_WDTCPU0CON0 = ((REG_SCU_WDTCPU0CON0 ^ 0xFCU) & ~(1U << LCK)) | (1U << ENDINIT);
-    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) != 0U)
-    {
-    }
+    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) != 0U) { }
 
-    /* Modify access: set ENDINIT. */
     REG_SCU_WDTCPU0CON0 = ((REG_SCU_WDTCPU0CON0 ^ 0xFCU) | (1U << LCK)) | (1U << ENDINIT);
-    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) == 0U)
-    {
-    }
+    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) == 0U) { }
 
-    while ((REG_GTM_CLC & (1U << GTM_DISS)) != 0U)
-    {
-    }
+    while ((REG_GTM_CLC & (1U << GTM_DISS)) != 0U) { }
 
-    /* Enable fixed clocks and select CMU_GCLK_EN as FXCLK input. */
     REG_GTM_CMU_FXCLK_CTRL &= ~(0xFU << FXCLK_SEL_SHIFT);
     REG_GTM_CMU_CLK_EN |= (0x2U << EN_FXCLK_SHIFT);
 
-    /* TOM0 channel 11 = local channel 3 in TGC1. */
     REG_GTM_TOM0_TGC1_GLB_CTRL |= (0x2U << UPEN_CTRL3_SHIFT);
     REG_GTM_TOM0_TGC1_FUPD_CTRL |= (0x2U << FUPD_CTRL3_SHIFT);
     REG_GTM_TOM0_TGC1_FUPD_CTRL |= (0x2U << RSTCN0_CH3_SHIFT);
@@ -373,18 +338,14 @@ static void init_buzzer_pwm(void)
     REG_GTM_TOM0_TGC1_ENDIS_CTRL |= (0x2U << ENDIS_CTRL3_SHIFT);
     REG_GTM_TOM0_TGC1_OUTEN_CTRL |= (0x2U << OUTEN_CTRL3_SHIFT);
 
-    /* Active level high and CMU_FXCLK1 as channel clock. */
     REG_GTM_TOM0_CH11_CTRL |= (1U << SL_BIT);
     REG_GTM_TOM0_CH11_CTRL &= ~(0x7U << CLK_SRC_SR_SHIFT);
     REG_GTM_TOM0_CH11_CTRL |=  (1U << CLK_SRC_SR_SHIFT);
 
-    /* Start with C4 period but 0% duty (silent). */
     REG_GTM_TOM0_CH11_SR0 = (BUZZER_CLOCK_HZ / 262U);
     REG_GTM_TOM0_CH11_SR1 = 0U;
 
-    /* TOUT3 <- TOM0 channel 11. */
     REG_GTM_TOUTSEL0 &= ~(0x3U << SEL3_SHIFT);
 
-    /* Apply channel/output/shadow settings. */
     REG_GTM_TOM0_TGC1_GLB_CTRL |= (1U << HOST_TRIG_BIT);
 }
