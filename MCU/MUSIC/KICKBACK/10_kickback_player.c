@@ -1,6 +1,5 @@
 #include "Ifx_Types.h"
 #include "IfxCpu.h"
-#include "kickback_player.h"
 #include "kickback_score.h"
 
 /*
@@ -58,7 +57,7 @@
 #define REG_STM0_TIM0               (*(volatile unsigned int *)(STM0_BASE_ADDRESS + 0x10U))
 #define STM0_FREQUENCY_HZ           100000000U
 
-/* PDF: quarter note = 204 BPM. One event tick = one sixteenth note. */
+/* Score/PDF: quarter note = 204 BPM. One event tick = one sixteenth note. */
 #define KICKBACK_BPM                204U
 #define TICKS_PER_QUARTER           4U
 
@@ -123,7 +122,8 @@ void ISR_SW2_STOP(void)
 /*
  * Public module entry point.
  * Cpu0_Main.c should perform the normal AURIX startup/watchdog/sync sequence,
- * then call this function once.  This function owns the application loop.
+ * declare this function as extern, then call it once.
+ * This function owns the application loop.
  */
 void kickback_run(void)
 {
