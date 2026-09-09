@@ -6,9 +6,10 @@
  * Pokemon Red/Blue/Yellow opening - one-buzzer TC275 player
  *
  * Easy Module Shield V1 + ShieldBuddy TC275 mapping:
- *   SW1    D2 -> P02.0 : PLAY
- *   SW2    D3 -> P02.1 : STOP by ERU interrupt
- *   Buzzer D5 -> P02.3 -> GTM TOUT3 -> TOM0_CH11
+ *   SW1       D2 -> P02.0 : PLAY
+ *   SW2       D3 -> P02.1 : STOP by ERU interrupt
+ *   Buzzer    D5 -> P02.3 -> GTM TOUT3 -> TOM0_CH11
+ *   Rotation  A0 -> ADCL.1 -> SAR4.7 / P32.3 : volume control
  *
  * Cpu0_Main.c keeps ownership of core0_main() and cpuSyncEvent.
  * Call: extern void pokemon_rby_opening_run(void);
@@ -52,6 +53,41 @@
 #define STM0_BASE_ADDRESS           (0xF0000000U)
 #define REG_STM0_TIM0               (*(volatile unsigned int *)(STM0_BASE_ADDRESS + 0x10U))
 #define STM0_FREQUENCY_HZ           100000000U
+#define VOLUME_UPDATE_TICKS         (STM0_FREQUENCY_HZ / 200U) /* 5 ms */
+
+/* ============================== VADC ============================ */
+/*
+ * MCU lecture ADC project mapping:
+ *   Shield A0 -> SAR4.7 / P32.3 -> VADC Group 4 Channel 7.
+ * Group result register 1 stores a right-aligned 12-bit result (0..4095).
+ */
+#define VADC_BASE_ADDRESS           (0xF0020000U)
+#define REG_VADC_CLC                (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x000U))
+#define REG_VADC_G4ARBCFG           (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x1480U))
+#define REG_VADC_G4ARBPR            (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x1484U))
+#define REG_VADC_G4ICLASS0          (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x14A0U))
+#define REG_VADC_G4QMR0             (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x1504U))
+#define REG_VADC_G4QINR0            (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x1510U))
+#define REG_VADC_G4CHCTR7           (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x161CU))
+#define REG_VADC_G4RES1             (*(volatile unsigned int *)(VADC_BASE_ADDRESS + 0x1704U))
+
+#define VADC_DISS_BIT               1U
+#define VADC_DISR_BIT               0U
+#define VADC_ANONC_SHIFT            0U
+#define VADC_ASEN0_BIT              24U
+#define VADC_CSM0_BIT               3U
+#define VADC_PRIO0_SHIFT            0U
+#define VADC_CMS_SHIFT              8U
+#define VADC_FLUSH_BIT              10U
+#define VADC_TREV_BIT               9U
+#define VADC_ENGT_SHIFT             0U
+#define VADC_RF_BIT                 5U
+#define VADC_REQCHNR_SHIFT          0U
+#define VADC_RESPOS_BIT             21U
+#define VADC_RESREG_SHIFT           16U
+#define VADC_ICLSEL_SHIFT           0U
+#define VADC_VF_BIT                 31U
+#define VADC_MAX_12BIT              4095U
 
 /* ============================== GTM ============================= */
 #define GTM_BASE_ADDRESS            (0xF0100000U)
@@ -91,9 +127,16 @@
 
 volatile unsigned int g_pokemon_stop_requested = 0U;
 volatile unsigned int g_pokemon_note_index = 0U;
+volatile unsigned int g_pokemon_volume_adc = VADC_MAX_12BIT;
+
+static unsigned int g_current_buzzer_period = 0U;
 
 static void init_ports(void);
 static void init_sw2_interrupt(void);
+static void init_vadc(void);
+static void vadc_start_conversion(void);
+static unsigned int vadc_read_result(void);
+static void update_buzzer_volume(void);
 static void init_buzzer_pwm(void);
 static unsigned int read_sw1(void);
 static void buzzer_set_frequency(unsigned int frequency_hz);
@@ -117,6 +160,7 @@ void pokemon_rby_opening_run(void)
     IfxCpu_enableInterrupts();
 
     init_ports();
+    init_vadc();
     init_buzzer_pwm();
     init_sw2_interrupt();
     buzzer_off();
@@ -129,7 +173,7 @@ void pokemon_rby_opening_run(void)
         {
             g_pokemon_stop_requested = 0U;
             g_pokemon_note_index = 0U;
-            (void)play_rtttl_sequence(g_pokemon_rby_opening_rtttl);
+            (void)play_rtttl_sequence(g_pokemon_rby_rtttl);
             buzzer_off();
 
             while (read_sw1() == 0U)
@@ -180,10 +224,98 @@ static void init_sw2_interrupt(void)
     REG_SRC_SCU_ERU0 &= ~(0x3U << TOS_SHIFT);
 }
 
+static void init_vadc(void)
+{
+    /* Unlock ENDINIT, enable VADC clock, then protect ENDINIT again. */
+    REG_SCU_WDTCPU0CON0 = ((REG_SCU_WDTCPU0CON0 ^ 0xFCU) & ~(1U << LCK)) | (1U << ENDINIT);
+    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) != 0U) { }
+
+    REG_SCU_WDTCPU0CON0 = ((REG_SCU_WDTCPU0CON0 ^ 0xFCU) | (1U << LCK)) & ~(1U << ENDINIT);
+    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) == 0U) { }
+
+    REG_VADC_CLC &= ~(1U << VADC_DISR_BIT);
+
+    REG_SCU_WDTCPU0CON0 = ((REG_SCU_WDTCPU0CON0 ^ 0xFCU) & ~(1U << LCK)) | (1U << ENDINIT);
+    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) != 0U) { }
+
+    REG_SCU_WDTCPU0CON0 = ((REG_SCU_WDTCPU0CON0 ^ 0xFCU) | (1U << LCK)) | (1U << ENDINIT);
+    while ((REG_SCU_WDTCPU0CON0 & (1U << LCK)) == 0U) { }
+
+    while ((REG_VADC_CLC & (1U << VADC_DISS_BIT)) != 0U) { }
+
+    /* Group 4 request source 0: highest priority, wait-for-start, enabled. */
+    REG_VADC_G4ARBPR |=  (0x3U << VADC_PRIO0_SHIFT);
+    REG_VADC_G4ARBPR &= ~(1U << VADC_CSM0_BIT);
+    REG_VADC_G4ARBPR |=  (1U << VADC_ASEN0_BIT);
+
+    /* Queue source 0: enable pending conversion requests and clear old queue. */
+    REG_VADC_G4QMR0 &= ~(0x3U << VADC_ENGT_SHIFT);
+    REG_VADC_G4QMR0 |=  (0x1U << VADC_ENGT_SHIFT);
+    REG_VADC_G4QMR0 |=  (1U << VADC_FLUSH_BIT);
+
+    /* Group 4 converter normal operation. */
+    REG_VADC_G4ARBCFG |= (0x3U << VADC_ANONC_SHIFT);
+
+    /* Group-specific input class 0, 12-bit conversion. */
+    REG_VADC_G4ICLASS0 &= ~(0x7U << VADC_CMS_SHIFT);
+
+    /* Channel 7 -> Group Result Register 1, right-aligned, input class 0. */
+    REG_VADC_G4CHCTR7 |=  (1U << VADC_RESPOS_BIT);
+    REG_VADC_G4CHCTR7 &= ~(0xFU << VADC_RESREG_SHIFT);
+    REG_VADC_G4CHCTR7 |=  (0x1U << VADC_RESREG_SHIFT);
+    REG_VADC_G4CHCTR7 &= ~(0x3U << VADC_ICLSEL_SHIFT);
+}
+
+static void vadc_start_conversion(void)
+{
+    /* Single-shot conversion of Group 4 Channel 7. */
+    REG_VADC_G4QINR0 &= ~(0x1FU << VADC_REQCHNR_SHIFT);
+    REG_VADC_G4QINR0 |=  (0x7U << VADC_REQCHNR_SHIFT);
+    REG_VADC_G4QINR0 &= ~(1U << VADC_RF_BIT);
+    REG_VADC_G4QMR0  |=  (1U << VADC_TREV_BIT);
+}
+
+static unsigned int vadc_read_result(void)
+{
+    unsigned int result;
+
+    while ((REG_VADC_G4RES1 & (1UL << VADC_VF_BIT)) == 0U)
+    {
+        if (g_pokemon_stop_requested != 0U)
+        {
+            return 0U;
+        }
+    }
+
+    result = REG_VADC_G4RES1 & 0xFFFFU;
+    return (result & VADC_MAX_12BIT);
+}
+
+static void update_buzzer_volume(void)
+{
+    unsigned int adc;
+    unsigned int duty;
+
+    if (g_current_buzzer_period == 0U)
+    {
+        return;
+    }
+
+    vadc_start_conversion();
+    adc = vadc_read_result();
+    g_pokemon_volume_adc = adc;
+
+    /* A0 0..4095 maps to PWM duty 0..50% without changing pitch. */
+    duty = (unsigned int)(((unsigned long long)g_current_buzzer_period * (unsigned long long)adc) /
+                          (2ULL * (unsigned long long)VADC_MAX_12BIT));
+
+    REG_GTM_TOM0_CH11_SR1 = duty;
+    REG_GTM_TOM0_CH11_CM1 = duty;
+}
+
 static void buzzer_set_frequency(unsigned int frequency_hz)
 {
     unsigned int period;
-    unsigned int duty;
 
     if (frequency_hz == 0U)
     {
@@ -192,16 +324,16 @@ static void buzzer_set_frequency(unsigned int frequency_hz)
     }
 
     period = (BUZZER_CLOCK_HZ + (frequency_hz / 2U)) / frequency_hz;
-    duty = period / 2U;
+    g_current_buzzer_period = period;
 
     REG_GTM_TOM0_CH11_SR0 = period;
-    REG_GTM_TOM0_CH11_SR1 = duty;
     REG_GTM_TOM0_CH11_CM0 = period;
-    REG_GTM_TOM0_CH11_CM1 = duty;
+    update_buzzer_volume();
 }
 
 static void buzzer_off(void)
 {
+    g_current_buzzer_period = 0U;
     REG_GTM_TOM0_CH11_SR1 = 0U;
     REG_GTM_TOM0_CH11_CM1 = 0U;
 }
@@ -210,6 +342,7 @@ static unsigned int wait_rtttl_duration(unsigned int denominator, unsigned int d
 {
     unsigned int start;
     unsigned int target_ticks;
+    unsigned int last_volume_update;
     unsigned long long numerator;
     unsigned long long divisor;
 
@@ -230,13 +363,24 @@ static unsigned int wait_rtttl_duration(unsigned int denominator, unsigned int d
 
     target_ticks = (unsigned int)(numerator / divisor);
     start = REG_STM0_TIM0;
+    last_volume_update = start;
 
     while ((unsigned int)(REG_STM0_TIM0 - start) < target_ticks)
     {
+        unsigned int now = REG_STM0_TIM0;
+
         if (g_pokemon_stop_requested != 0U)
         {
             buzzer_off();
             return 0U;
+        }
+
+        /* Read Rotation A0 while a note is sounding, so volume changes live. */
+        if ((g_current_buzzer_period != 0U) &&
+            ((unsigned int)(now - last_volume_update) >= VOLUME_UPDATE_TICKS))
+        {
+            update_buzzer_volume();
+            last_volume_update = now;
         }
     }
 
@@ -290,6 +434,25 @@ static unsigned int note_frequency(char note, unsigned int sharp, unsigned int o
 static unsigned int play_rtttl_sequence(const char *sequence)
 {
     const char *p = sequence;
+
+    /* Skip optional RTTTL name/default header; score data begins after second ':'. */
+    {
+        unsigned int colon_count = 0U;
+        const char *scan = p;
+        while (*scan != '\0')
+        {
+            if (*scan == ':')
+            {
+                colon_count++;
+                if (colon_count == 2U)
+                {
+                    p = scan + 1;
+                    break;
+                }
+            }
+            scan++;
+        }
+    }
 
     while (*p != '\0')
     {
