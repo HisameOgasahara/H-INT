@@ -4,7 +4,7 @@ KICKBACK 프로젝트의 검증된 TC275 재생 구조를 그대로 응용한 �
 
 ## Files
 
-- `10_pokemon_rby_opening.c` - SW1 재생, SW2 ERU 인터럽트 정지, GTM TOM0_CH11 PWM 출력, RTTTL 파서.
+- `10_pokemon_rby_opening.c` - SW1 재생, SW2 ERU 인터럽트 정지, GTM TOM0_CH11 PWM 출력, RTTTL 파서, A0 볼륨 제어.
 - `pokemon_rby_score.h` - 전체 RTTTL 데이터 인터페이스와 192 BPM 설정.
 - `pokemon_rby_full_score.c` - Pokemon Red/Blue/Yellow opening의 전체 단음 RTTTL 데이터.
 
@@ -15,8 +15,9 @@ KICKBACK 프로젝트의 검증된 TC275 재생 구조를 그대로 응용한 �
 - SW1: Easy Module Shield D2 -> ShieldBuddy TC275 P02.0
 - SW2: Easy Module Shield D3 -> ShieldBuddy TC275 P02.1
 - Buzzer: Easy Module Shield D5 -> ShieldBuddy TC275 P02.3 -> GTM TOUT3 -> TOM0_CH11
+- Rotation A0 potentiometer: Easy Module Shield A0 -> ShieldBuddy ADCL.1 -> TC275 SAR4.7 / P32.3 -> VADC Group 4 Channel 7
 
-YwRobot Easy Module Shield V1에서 D2=SW1, D3=SW2, D5=active buzzer이며, TC275 쪽 포트/ERU/GTM 경로는 기존 KICKBACK 프로젝트에서 동작 확인한 설정을 재사용한다.
+YwRobot Easy Module Shield V1에서 D2=SW1, D3=SW2, D5=buzzer, A0=rotation potentiometer이며, TC275 쪽 포트/ERU/GTM 경로는 기존 KICKBACK 프로젝트에서 동작 확인한 설정을 재사용한다.
 
 ## How it works
 
@@ -26,11 +27,23 @@ KICKBACK처럼 `{Hz, tick}` 배열을 미리 펼치는 대신, 이 프로젝트�
 
 Tempo는 원본 transcription의 192 BPM을 사용한다.
 
+### Rotation A0 volume control
+
+강의자료의 potentiometer ADC 실습과 같은 경로를 사용한다.
+
+1. A0의 아날로그 전압을 `VADC Group 4 / Channel 7`에서 12-bit 값(0~4095)으로 읽는다.
+2. 음높이를 결정하는 TOM0_CH11 period는 그대로 둔다.
+3. A0 값에 따라 TOM0_CH11 duty를 `0% ~ 50%` 범위로 바꿔 체감 음량을 조절한다.
+4. 재생 중 약 5 ms마다 A0를 다시 읽으므로 노브를 돌리면 현재 재생 중인 음에도 바로 반영된다.
+
+A0 최소 쪽은 거의 무음, 최대 쪽은 기존 50% duty에 해당한다. Active/passive buzzer의 실제 음량 반응은 선형적이지 않을 수 있다.
+
 ## Controls
 
 1. SW1을 한 번 누르면 처음부터 재생한다.
 2. 재생 중 SW2를 누르면 ERU interrupt가 발생하여 즉시 PWM duty를 0으로 만들고 정지한다.
-3. SW1을 놓았다가 다시 누르면 처음부터 다시 재생한다.
+3. 재생 중 Rotation A0를 돌리면 부저의 체감 음량이 바뀐다.
+4. SW1을 놓았다가 다시 누르면 처음부터 다시 재생한다.
 
 ## AURIX project integration
 
