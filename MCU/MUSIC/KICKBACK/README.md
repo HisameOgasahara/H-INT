@@ -2,8 +2,29 @@
 
 ## Files
 
-- `10_kickback_player.c` - TC275 playback engine, SW1 PLAY, SW2 ERU interrupt STOP, GTM TOM0_CH11 PWM buzzer output.
-- `kickback_score.h` - monophonic representative-tone score data.
+- `10_kickback_player.c` - TC275 playback engine. Handles SW1 PLAY, SW2 ERU interrupt STOP, STM timing, and GTM TOM0_CH11 PWM buzzer output.
+- `kickback_score.h` - score event type, constants, and `extern` declarations shared by the player and score data.
+- `kickback_score.c` - actual monophonic KICK BACK score event table generated from the provided MIDI.
+
+`kickback_player.h` is no longer used. The player implementation exports `kickback_run()` directly.
+
+## Integration with AURIX Development Studio
+
+`10_kickback_player.c` intentionally does not define `core0_main()` or `cpuSyncEvent`, so it does not collide with the normal generated `Cpu0_Main.c`.
+
+In `Cpu0_Main.c`, declare the player entry point and call it after the normal startup/watchdog/core-sync sequence:
+
+```c
+extern void kickback_run(void);
+```
+
+Then call:
+
+```c
+kickback_run();
+```
+
+`kickback_run()` owns the application loop after it is entered.
 
 ## Hardware mapping
 
@@ -13,7 +34,9 @@
 
 ## Score model
 
-The provided score PDF is in 4/4 at quarter-note = 204 BPM and contains many simultaneous notes/chords. One buzzer/PWM channel can generate only one fundamental frequency at a time, so this first version uses the requested **representative/root-like note reduction** rather than attempting polyphony.
+The source music contains simultaneous notes/chords, while one buzzer/PWM channel can generate only one fundamental frequency at a time. The current score therefore uses the requested monophonic representative/root-like reduction.
+
+The provided MIDI has no Set Tempo event, so the player supplies quarter-note = 204 BPM from the score/PDF reference.
 
 Each score event is:
 
@@ -29,6 +52,6 @@ Each score event is:
 2. Press SW2 during playback to trigger the ERU interrupt and stop immediately.
 3. Release SW1 and press it again to restart from the beginning.
 
-## Important limitation of this version
+## Current score generation
 
-The uploaded PDF is a rendered notation page rather than machine-readable MIDI/MusicXML. Therefore `kickback_score.h` is a **first-pass representative-tone arrangement**, not a guaranteed note-for-note transcription of all 159 measures. The playback engine is already independent of the score, so replacing the table with a MIDI-derived table later does not require changing the MCU driver/interrupt/PWM code.
+`kickback_score.c` is generated from the provided MIDI rather than manually transcribed from the rendered PDF. Simultaneous note onsets are reduced to one representative low/root-like pitch so the score can be played by the single buzzer channel. The playback engine is independent of the score table, so the score data can be replaced later without changing the port, interrupt, STM, or PWM driver logic.
