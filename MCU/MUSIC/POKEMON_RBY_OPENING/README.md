@@ -4,11 +4,12 @@ KICKBACK 프로젝트의 검증된 TC275 재생 구조를 그대로 응용한 �
 
 ## Files
 
+- `Cpu0_Main.c` - AURIX CPU0 진입점. watchdog 비활성화, CPU sync 후 player를 호출한다.
 - `10_pokemon_rby_opening.c` - SW1 재생, SW2 ERU 인터럽트 정지, GTM TOM0_CH11 PWM 출력, RTTTL 파서, A0 볼륨 제어.
 - `pokemon_rby_score.h` - 전체 RTTTL 데이터 인터페이스와 192 BPM 설정.
 - `pokemon_rby_full_score.c` - Pokemon Red/Blue/Yellow opening의 전체 단음 RTTTL 데이터.
 
-세 파일 모두 실제 빌드에 사용된다. 별도의 player header는 두지 않았다.
+네 파일 모두 실제 빌드에 사용된다. 별도의 player header는 두지 않았다.
 
 ## Hardware mapping
 
@@ -47,14 +48,31 @@ A0 최소 쪽은 거의 무음, 최대 쪽은 기존 50% duty에 해당한다. A
 
 ## AURIX project integration
 
-이 파일은 `core0_main()`이나 `cpuSyncEvent`를 정의하지 않는다. 기존 `Cpu0_Main.c`의 startup/watchdog/sync 절차 뒤에서 다음처럼 호출한다.
+`Cpu0_Main.c`가 `core0_main()`과 `cpuSyncEvent`를 유일하게 정의한다. startup/watchdog/sync 뒤에서 player 진입 함수만 호출한다.
 
 ```c
 extern void pokemon_rby_opening_run(void);
 
-/* normal startup ... */
-pokemon_rby_opening_run();
+IfxCpu_syncEvent cpuSyncEvent = 0;
+
+int core0_main(void)
+{
+    IfxCpu_enableInterrupts();
+
+    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
+    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
+
+    IfxCpu_emitEvent(&cpuSyncEvent);
+    IfxCpu_waitEvent(&cpuSyncEvent, 1);
+
+    pokemon_rby_opening_run();
+
+    while (1) { }
+    return (1);
+}
 ```
+
+`10_pokemon_rby_opening.c`에는 `core0_main()`이나 `cpuSyncEvent`를 정의하지 않는다. 따라서 AURIX Development Studio 프로젝트에서는 이 폴더의 `Cpu0_Main.c`를 CPU0 main 파일로 사용하고, 나머지 세 파일을 함께 빌드하면 된다.
 
 `KICKBACK/10_kickback_player.c`와 이 파일은 둘 다 같은 SW2 ERU0/priority와 같은 buzzer TOM 채널을 사용하는 대체 예제다. 하나의 AURIX 실행 프로젝트에 두 음악 player를 동시에 넣지 말고, 재생할 프로젝트 하나만 선택한다.
 
