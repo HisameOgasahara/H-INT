@@ -127,7 +127,7 @@ if __name__ == "__main__":
         done = False
         score = 0
         # env 초기화
-        state, _ = env.reset()
+        state = env.reset()
         state = np.reshape(state, [1, state_size])
 
         while not done:
@@ -137,8 +137,7 @@ if __name__ == "__main__":
             # 현재 상태로 행동을 선택
             action = agent.get_action(state)
             # 선택한 행동으로 환경에서 한 타임스텝 진행
-            next_state, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
+            next_state, reward, done, info = env.step(action)
             next_state = np.reshape(next_state, [1, state_size])
 
             # 타임스텝마다 보상 0.1, 에피소드가 중간에 끝나면 -1 보상
